@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from gateway.agent_api.routes import router as agent_router
+from gateway.app_api.auth import router as auth_router
+from gateway.app_api.families import router as families_router
 from gateway.contracts.crypto import CryptoClient
 from gateway.core.config import Settings, get_settings
 from gateway.core.errors import install_error_handlers
@@ -48,6 +50,8 @@ def create_app(
     )
     install_error_handlers(app)
     app.include_router(agent_router)
+    app.include_router(auth_router)
+    app.include_router(families_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:

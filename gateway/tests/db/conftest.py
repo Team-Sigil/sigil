@@ -9,6 +9,7 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -21,9 +22,11 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from gateway.core.config import Settings
 from gateway.db.models import Base, Family, User
 from gateway.enums import Role
-from tests.db.world import World, build_world
+from gateway.main import create_app
+from tests.db.world import AGENT_WALLET, MINT, World, build_world
 
 REPO_DIR = Path(__file__).resolve().parents[2]
 ROOT_ENV = REPO_DIR / ".env"
@@ -131,3 +134,14 @@ async def family(sessionmaker: async_sessionmaker[AsyncSession]) -> Family:
 @pytest.fixture
 async def world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
     return await build_world(sessionmaker)
+
+
+@pytest.fixture
+async def app_client(world: World) -> AsyncIterator[httpx.AsyncClient]:
+    """The whole gateway app on the test database, with the world's fake crypto layer."""
+    settings = Settings(agent_wallet_pubkey=AGENT_WALLET, ausd_mint=MINT)
+    app = create_app(settings=settings, sessionmaker=world.sessionmaker, crypto=world.crypto)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+    ) as client:
+        yield client

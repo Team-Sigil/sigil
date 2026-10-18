@@ -28,6 +28,18 @@ class NotFoundError(DomainError):
     message = "Not found."
 
 
+class UnauthorizedError(DomainError):
+    code = "UNAUTHORIZED"
+    status = 401
+    message = "Authentication required."
+
+
+class ForbiddenError(DomainError):
+    code = "FORBIDDEN"
+    status = 403
+    message = "Not allowed."
+
+
 class ConflictError(DomainError):
     code = "CONFLICT"
     status = 409

@@ -83,6 +83,7 @@ class World:
     crypto: FakeCrypto
     engine: TransferEngine
     guardian_key: SigningKey
+    dependent_key: SigningKey
     family: Family
 
     @property
@@ -148,8 +149,9 @@ class World:
 
 
 async def build_world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
-    guardian_key = SigningKey.generate()
-    guardian_wallet, dependent_wallet, dependent_account = wallet(guardian_key), wallet(), wallet()
+    guardian_key, dependent_key = SigningKey.generate(), SigningKey.generate()
+    guardian_wallet, dependent_wallet = wallet(guardian_key), wallet(dependent_key)
+    dependent_account = wallet()
     async with sessionmaker() as session:
         guardian = User(wallet_address=guardian_wallet, role=Role.GUARDIAN)
         dependent = User(wallet_address=dependent_wallet, role=Role.DEPENDENT)
@@ -189,4 +191,4 @@ async def build_world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
     engine = TransferEngine(
         sessionmaker, crypto, agent_wallet=AGENT_WALLET, mint=MINT, clock=lambda: NOW
     )
-    return World(sessionmaker, crypto, engine, guardian_key, family)
+    return World(sessionmaker, crypto, engine, guardian_key, dependent_key, family)
