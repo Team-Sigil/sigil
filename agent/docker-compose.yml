@@ -1,0 +1,45 @@
+# The agent service plus the in-memory mock platform with the demo family.
+#   ANTHROPIC_API_KEY=sk-... docker compose up --build
+# Then follow walkthrough.md against http://localhost:8100 and http://localhost:8200.
+
+services:
+  platform:
+    build: .
+    command: ["python", "-m", "mock_platform.server"]
+    environment:
+      MOCK_HOST: 0.0.0.0
+      MOCK_PORT: "8200"
+    ports:
+      - "8200:8200"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8200), 2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  agent:
+    build: .
+    environment:
+      PLATFORM_API_URL: http://platform:8200
+      # The mock platform's fixed test tokens.
+      PLATFORM_MAKER_TOKEN: maker-test-token
+      PLATFORM_AUDITOR_TOKEN: auditor-test-token
+      AGENT_INBOUND_TOKEN: ${AGENT_INBOUND_TOKEN:-change-me}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}
+      AGENT_SCHEDULER: ${AGENT_SCHEDULER:-1}
+      AGENT_MAKER_MODEL: ${AGENT_MAKER_MODEL:-claude-opus-5-5}
+      AGENT_AUDITOR_MODEL: ${AGENT_AUDITOR_MODEL:-claude-opus-5-5}
+    ports:
+      - "8100:8100"
+    # The sandbox resolves the platform's address once at startup, so the platform
+    # must already be up.
+    depends_on:
+      platform:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

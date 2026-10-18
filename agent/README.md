@@ -281,6 +281,12 @@ PLATFORM_MAKER_TOKEN=maker-test-token PLATFORM_AUDITOR_TOKEN=auditor-test-token 
 AGENT_INBOUND_TOKEN=change-me python -m agent_layer   # agent service on :8100
 ```
 
+Or both in containers (mock platform on :8200, agent service on :8100):
+
+```bash
+ANTHROPIC_API_KEY=sk-... docker compose up --build
+```
+
 [walkthrough.md](walkthrough.md) drives both services step by step with HTTPie. Every
 command in it is also a test (`pytest tests/test_walkthrough.py`).
 
