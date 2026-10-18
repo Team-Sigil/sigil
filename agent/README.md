@@ -5,6 +5,71 @@ allowance, the independent **Auditor agent** that checks larger or riskier trans
 the **scheduled triggers** that wake them. See
 [the system architecture](<Delegated Financial Guardianship — System Architecture.md>).
 
+## The agents: responsibilities, inputs, outputs
+
+### Maker ([`maker/agent.py`](src/agent_layer/maker/agent.py))
+
+Decides what happens to each request and runs the allowance. It never holds keys,
+chooses a recipient, changes policy or writes to a database.
+
+| Responsibility | Entry point | Uses the model? |
+|---|---|---|
+| Judge a dependent's request: send full or partial, counter-offer, ask for proof, ask the guardian, or decline | `MakerAgent.handle_request` | Yes |
+| Send the weekly allowance, adjusted within the guidance | `MakerAgent.run_allowance` | Yes |
+| Draft a policy from the guardian's chat, with test scenarios and open questions | `flows/policy.py: draft_policy` | Yes |
+| Write the weekly summary | `flows/scheduled.py: weekly_summary` | Wording only; pattern flags are code |
+| Warn the dependent when spending runs fast | `flows/scheduled.py: pace_check` | No |
+| Ask the guardian for a top-up before the reservoir runs dry | `flows/scheduled.py: reservoir_check` | No |
+| Propose "stop asking" policy updates from the guardian's answers | `flows/scheduled.py: learning_proposals` | No |
+
+**Inputs**, all read through `MakerAPI`:
+
+| Input | Platform call |
+|---|---|
+| The request: the dependent's words, amount asked, amount already sent, emergency flag, conversation so far, verified guardian answers | `GET /requests/{id}` |
+| Proof: images go to the model through vision, text goes as delimited data | `GET /proofs/{id}` |
+| Signed policy view (outer limits and private guidance), week's budget, reservoir, freeze flag, recent history | `GET /dependents/{id}/context` |
+| Guardian's past answers (for learning) and the week's activity (for the summary) | `GET /guardians/{id}/answers`, `GET /dependents/{id}/weekly-activity` |
+| The guardian's chat (for policy drafting) | Inbound `POST /v1/policy-drafts` |
+| Wake-ups | Scheduler, or inbound `POST /v1/jobs/{name}` |
+
+**Outputs.** The model can call only these tools; code validates each call, then turns it into a platform call:
+
+| Tool | Becomes | Notes |
+|---|---|---|
+| `request_transfer(amount, purpose, category, category_confidence, reasoning)` | `POST /transfers` | No recipient field; code adds the idempotency key and, when review is required, the Auditor's verdict id |
+| `ask_for_proof(kind, reason)` | `POST /proof-requests` | Request mode only |
+| `ask_guardian(question, recommendation, recommended_amount, urgency)` | `POST /guardian-questions` | At most one per run |
+| `propose_policy_update(change, evidence)` | `POST /policy-proposals` | Takes effect only if the guardian signs it |
+| `notify_guardian(message)` | `POST /notifications` | Informational note |
+| `finish(outcome, reply_to_dependent, summary_for_guardian)` | `POST /decisions` | Ends every run. Code corrects the outcome if it doesn't match what happened, and checks the reply before recording it |
+
+Code-only outputs: pace warnings and the weekly summary (`POST /notifications`),
+top-up questions (`POST /guardian-questions`), and guardrail events (`POST /events`).
+
+### Auditor ([`auditor/auditor.py`](src/agent_layer/auditor/auditor.py))
+
+The guardian's advocate. It reviews a transfer the maker wants to make when a trigger in
+[`auditor/triggers.py`](src/agent_layer/auditor/triggers.py) fires, before the engine
+sees it. It can only make an outcome stricter: it never approves, raises an amount,
+talks to the dependent or calls the engine.
+
+| | |
+|---|---|
+| **Triggers** | Engine-verifiable: amount ≥ review threshold, emergency claimed, amount over 2× the usual, new category, allowance above usual. Agent-side (can only add reviews): category confidence < 0.7, manipulation signals in the input |
+| **Inputs, phase 1** | The dependent's words, proof (text and images), guidance, budget, recent history, and why it is reviewing. Not the maker's reasoning |
+| **Inputs, phase 2** | The maker's amount, category, confidence, purpose and reasoning |
+| **Output** | `agree`, or `flag` with a reason and concerns, posted with the Auditor's own token to `POST /auditor/verdicts` and bound to the transfer's idempotency key, amount and category |
+| **On a flag** | No money moves; the maker's code asks the guardian with both views (`POST /guardian-questions`) |
+| **On failure** | Any error, refusal, exhausted budget or unrecordable verdict counts as a flag |
+
+### Differences from the architecture doc
+
+- The model ends every run with `finish` (explicit outcome plus reply), so decisions are structured and loggable.
+- `notify` is narrowed to `notify_guardian`; the dependent's reply goes through `finish`, and pace warnings are code.
+- Pace, reservoir, pattern flags and learning proposals are deterministic code, not model calls.
+- The Auditor also sees the proof, and manipulation signals in the input force a review.
+
 ## Isolation: everything goes through the platform API
 
 The agent zone has no database, no file access and no keys. Every read (policy, budget,

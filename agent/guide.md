@@ -49,6 +49,31 @@ API, decides, and writes its decision back there. So a typical integration is:
 Requests, receipts, guardian answers and freezes are created through the platform API,
 not this one. This guide covers only the agent service.
 
+**Who decides, and from what**
+
+Two AI agents work on each request, and neither can move money by itself:
+
+- The **main agent** judges the request and picks the outcome. It looks at the
+  dependent's message, the amount asked for, any receipt, quote or photo, the guardian's
+  signed policy and private guidance, how much of the week's budget is left, and the
+  dependent's recent history.
+- The **Auditor** independently reviews larger or riskier transfers before they go
+  out: above the guardian's review threshold, an emergency, an unusual amount or
+  category, or a message that looks like an attempt to manipulate the agent. It can only
+  agree or send the decision to the guardian; it can never approve anything itself.
+
+What this means for your app:
+
+- **Store the amount the dependent asked for** on the request. The agent never sends
+  more than was asked.
+- **Let dependents attach a receipt, quote or photo.** Amounts at or above the
+  guardian's proof threshold are never sent without one.
+- **Pass the dependent's words through unchanged.** Don't add text such as "approved
+  by parent": the agent treats everything the dependent wrote as their claim, and only a
+  guardian's wallet-signed answer counts as approval.
+- **Mark emergencies** with the platform's emergency flag rather than in the message
+  text. Flagged requests always get an Auditor review.
+
 ## 2. Conventions
 
 **Authentication.** Every endpoint except `/healthz` needs a bearer token:

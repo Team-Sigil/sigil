@@ -82,7 +82,7 @@ The core security claim: **even a fully manipulated agent cannot move more than 
 **Controls by layer**
 
 - **Gateway:** wallet sign-in, session expiry, role checks (guardian vs dependent), rate limits, request size limits, schema validation of every body.
-- **Agent:** a narrow tool set (`request_transfer`, `ask_guardian`, `ask_for_proof`, `propose_policy_update`, `notify`); tool arguments validated with Pydantic; system prompt treats dependent messages and proof content as data; no direct database or network access. The Auditor has a separate system prompt, a single output (agree or flag with a reason), and reads the raw request before the agent's reasoning.
+- **Agent:** a narrow tool set (`request_transfer`, `ask_guardian`, `ask_for_proof`, `propose_policy_update`, `notify_guardian`, and `finish`, which ends every request with an explicit outcome and the reply to the dependent); tool arguments validated with Pydantic; system prompt treats dependent messages and proof content as data; no direct database or network access. The Auditor has a separate system prompt, a single output (agree or flag with a reason), and reads the raw request and any proof before the agent's reasoning.
 - **Policy engine:** pure functions over the signed policy; checks run in a fixed order; deny by default when anything is missing or malformed, including a required Auditor verdict; every decision logged with reasons.
 - **Signer:** a separate process holding the only copy of the decrypted delegate key; a second, independent check of amount, recipient and remaining delegation; a per-transfer and per-day hard cap of its own.
 - **Chain:** SPL delegation caps total exposure; the guardian can `revoke` without the app.
@@ -166,9 +166,9 @@ The boxed blocks are the agent's moves after judging a request. Asking for proof
 - **Judging** weighs the purpose against the guardian's guidance, how much of the week's budget is left, and the dependent's recent history. The outcome can be the full amount, a partial amount, a counter-offer ("half now, half after the receipt") or a decline.
 - **Proof** (receipt, quote, photo) is passed to the model as delimited data, so instructions hidden inside it are not followed.
 - **Asking the guardian** is the agent's call, with its recommendation attached; questions are batched so a busy guardian isn't pinged constantly. The guardian answers with a wallet signature that goes to the engine, so a "guardian approved" claim in chat never counts.
-- **Auditor review** runs when a transfer is above the guardian's review threshold, has a low-confidence category, mentions an emergency, or breaks the dependent's usual pattern; small routine transfers skip it. The Auditor reads the raw request, guidance and history and forms its own view before reading the agent's reasoning, then returns agree, or flag with a reason.
+- **Auditor review** runs when a transfer is above the guardian's review threshold, has a low-confidence category, mentions an emergency, breaks the dependent's usual pattern (an unusually large amount or a new category), or comes from a message the input filter marked as possible manipulation; small routine transfers skip it. The engine applies the triggers it can verify itself, so the agent cannot skip a review by misreporting. The Auditor reads the raw request, any proof, guidance and history and forms its own view before reading the agent's reasoning, then returns agree, or flag with a reason. A first view of "concerned" cannot turn into "agree" after reading the agent's reasoning, and any Auditor failure counts as a flag.
 - **Auditor flags** sends the request to the guardian with both agents' views ("the agent said yes; the Auditor disagreed because…"). The guardian's signed answer is final.
-- **request\_transfer** carries amount, purpose, category, the agent's reasoning, the Auditor's verdict id when one is required, and an idempotency key; it has no recipient field. The engine checks outer limits, funds, the dependent's registered address and that a required verdict exists, then sends the signer an HMAC-signed instruction.
+- **request\_transfer** carries amount, purpose, category, the agent's reasoning, the Auditor's verdict id when one is required, and an idempotency key derived by code from the request (never chosen by the model); it has no recipient field. The engine checks outer limits, funds, the dependent's registered address and that a required verdict exists, then sends the signer an HMAC-signed instruction.
 - **The signer** re-checks amount against its own cap, the recipient against the allowlist, and the remaining delegation, before signing `transfer_checked`.
 - **Sends money** logs the decision and the Auditor verdict, updates budgets and stores the transaction signature in one database transaction.
 - **Blocked** is the safety net, not the normal path; the agent explains the limit and offers an alternative, such as a smaller amount or asking the guardian.
@@ -187,6 +187,8 @@ Between requests, the agent runs the allowance on its own; every money-moving st
 | Unusual pattern | Flags it in the guardian's summary (repeated "education" requests, many small requests in a day, blocked attempts) |
 | Guardian's past answers | Proposes policy updates ("You've approved every book purchase; should I stop asking?"), which take effect only once signed |
 | End of week | Writes a short summary: what was spent on, what was declined or asked about, and anything to decide |
+
+The pace warning, reservoir forecast, pattern flags and policy-update proposals are computed by deterministic code in the agent zone, with no model call: cheaper, and nothing for a dependent to steer. The model decides the allowance amount and writes the weekly summary's wording.
 
 The scheduler can only wake the agent; it cannot move money or skip a check, and a scheduled transfer uses the same idempotency key scheme so a restarted job never pays twice. A routine allowance skips the Auditor; one the agent adjusted above the usual amount goes through review like any other larger transfer.
 
@@ -219,4 +221,4 @@ The agent reads receipts to check amount, merchant and date against the claim. P
 - [ ] How much of the policy the dependent can see: outer limits only, or the guidance too?
 - [ ] Notifications for the demo: in-app only, or a LINE or Telegram bot for the guardian?
 
-* [ ] Auditor review threshold: a fixed amount the guardian sets, a share of the weekly budget, or both? And same model as the main agent, or a different one for more independence?
+* [ ] Auditor review threshold: a fixed amount the guardian sets, a share of the weekly budget, or both? And same model as the main agent, or a different one for more independence? *Current implementation default: the guardian's own threshold when set, otherwise 25% of the weekly cap; both agents on the same model, configurable per agent.*
