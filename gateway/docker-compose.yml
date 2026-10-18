@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: sigil
+      POSTGRES_USER: sigil_owner
+      POSTGRES_PASSWORD: ${SIGIL_OWNER_PASSWORD:?set in .env}
+      SIGIL_APP_PASSWORD: ${SIGIL_APP_PASSWORD:?set in .env}
+      SIGIL_SIGNER_RO_PASSWORD: ${SIGIL_SIGNER_RO_PASSWORD:?set in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init-roles.sh:/docker-entrypoint-initdb.d/01-init-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sigil_owner -d sigil"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
