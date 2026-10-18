@@ -1,0 +1,51 @@
+{
+	"name": "Autonomous Pentesting Agent",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "agent",
+	"workspaceFolder": "/workspace",
+	"forwardPorts": [],
+	"remoteUser": "vscode",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"vscodevim.vim",
+				"anthropic.claude-code"
+			],
+			"settings": {
+				"window.autoDetectColorScheme": true,
+				"workbench.sideBar.location": "right",
+				"chat.agent.enabled": false,
+				"workbench.browser.enableChatTools": false,
+				"chat.checkpoints.enabled": false,
+				"chat.customAgentInSubagent.enabled": false,
+				"chat.editing.confirmEditRequestRemoval": false,
+				"chat.editing.confirmEditRequestRetry": false,
+				"chat.agent.thinking.terminalTools": false,
+				"chat.agent.thinking.generateTitles": false,
+				"chat.agent.codeBlockProgress": false,
+				"chat.undoRequests.restoreInput": false,
+				"telemetry.feedback.enabled": false,
+				"telemetry.editStats.details.enabled": false,
+				"telemetry.editStats.enabled": false,
+				"telemetry.telemetryLevel": "off",
+				"chat.disableAIFeatures": true,
+				"vim.smartRelativeLine": true,
+				"vim.handleKeys": {
+					"<C-p>": false
+				},
+				"prettier.singleQuote": true,
+				"[typescriptreact]": {
+					"editor.defaultFormatter": "esbenp.prettier-vscode"
+				},
+				"[json]": {
+					"editor.defaultFormatter": "esbenp.prettier-vscode"
+				},
+				"editor.quickSuggestions": {
+					"other": "on",
+					"comments": "off",
+					"strings": "on"
+				}
+			}
+		}
+	}
+}
