@@ -19,6 +19,8 @@ class RequestFacts:
     amount_requested: int | None
     already_sent: int
     emergency_claimed: bool
+    # Cleared but not yet confirmed: it may still go out, so it counts as sent here.
+    already_pending: int = 0
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,8 @@ def check_transfer(facts: TransferFacts) -> str | None:
             return "unknown request"
         if request.amount_requested is None:
             return "no amount requested"
-        if t.amount > request.amount_requested - request.already_sent:
+        still_open = request.amount_requested - request.already_sent - request.already_pending
+        if t.amount > still_open:
             return "over requested amount"
 
     if not override:

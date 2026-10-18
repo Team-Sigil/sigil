@@ -1,6 +1,6 @@
 """The agent layer's platform API payloads, mirrored verbatim.
 
-Source of truth: `agent_layer/contracts.py` in Team-Sigil/agent-layer (as of 72b80be). The
+Source of truth: `agent_layer/contracts.py` in Team-Sigil/agent-layer (as of b5e5d25). The
 gateway serves these shapes on `/agent/v1/*`. Do not edit by hand: change them in the agent
 layer first, then copy. `tests/test_contracts.py` compares the JSON schemas with the agent
 layer whenever it is checked out next to this repo.
@@ -64,6 +64,7 @@ class Outcome(StrEnum):
     AUDITOR_FLAGGED = "auditor_flagged"
     BLOCKED = "blocked"
     SAFE_FALLBACK = "safe_fallback"
+    TRANSFER_PENDING = "transfer_pending"  # cleared, but the chain hasn't confirmed it yet
 
 
 MODEL_CHOOSABLE_OUTCOMES = {
@@ -147,6 +148,13 @@ class DependentRequest(_Lenient):
     amount_requested: int | None = Field(default=None, gt=0)
     emergency_claimed: bool = False
     already_sent: int = Field(default=0, ge=0)
+    # Cleared by the engine but not yet confirmed on chain: counts as sent for "never
+    # more than asked", because it may still go out.
+    already_pending: int = Field(default=0, ge=0)
+    # The amount the guardian approved for this request with a wallet signature, as
+    # verified by the platform. Exactly this amount may go above the per-request max and
+    # the weekly cap without review; the engine re-verifies the signature itself.
+    guardian_approved_amount: int | None = Field(default=None, gt=0)
     thread: list[ThreadMessage] = Field(default=[], max_length=MAX_ITEMS)
     proofs: list[ProofRef] = Field(default=[], max_length=50)
 
@@ -246,7 +254,9 @@ class TransferInstruction(_Strict):
 
 
 class TransferResult(_Lenient):
-    status: Literal["sent", "blocked", "duplicate"]
+    # "pending": cleared and reserved, but the chain hasn't confirmed it (e.g. the signer
+    # is down). It may still go out, so it is never reported as blocked.
+    status: Literal["sent", "blocked", "duplicate", "pending"]
     decision_id: str
     amount: int = 0
     reason: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)

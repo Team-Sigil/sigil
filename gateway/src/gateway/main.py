@@ -1,5 +1,7 @@
+import asyncio
+import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -21,8 +23,25 @@ from gateway.core.logging import configure_logging
 from gateway.crypto_client import HttpCryptoClient
 from gateway.db.session import make_sessionmaker
 from gateway.engine.transfers import TransferEngine
-from gateway.events import EventBus
+from gateway.events import EventBus, EventType
 from gateway.protection import BodyLimitMiddleware, RateLimitMiddleware
+
+logger = logging.getLogger(__name__)
+
+
+async def retry_pending_forever(engine: TransferEngine, events: EventBus, every: float) -> None:
+    """Finishes transfers left pending while the crypto layer was down (agent layer handoff,
+    item 1). Each retry uses the transfer's own idempotency key, so nothing is sent twice."""
+    while True:
+        try:
+            for family_id, result in await engine.retry_pending():
+                if result.status == "sent":
+                    events.publish(
+                        family_id, EventType.TRANSFER, {"transfer_id": result.decision_id}
+                    )
+        except Exception:
+            logger.exception("Pending transfer retry failed; trying again later")
+        await asyncio.sleep(every)
 
 
 def create_app(
@@ -50,8 +69,16 @@ def create_app(
     capture = capture or capture_config(settings)
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        retry = asyncio.create_task(
+            retry_pending_forever(
+                app.state.engine, app.state.events, settings.pending_retry_seconds
+            )
+        )
         yield
+        retry.cancel()
+        with suppress(asyncio.CancelledError):
+            await retry
         if owned_crypto is not None:
             await owned_crypto.aclose()
         if owned_agent is not None:

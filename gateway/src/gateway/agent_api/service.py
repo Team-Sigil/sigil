@@ -39,7 +39,13 @@ from gateway.db.models import (
     Transfer,
     User,
 )
-from gateway.engine.transfers import parse_uuid, usable_delegation, week_start
+from gateway.engine.transfers import (
+    parse_uuid,
+    pending_amount,
+    usable_delegation,
+    verified_approvals,
+    week_start,
+)
 from gateway.enums import (
     Audience,
     AuditEvent,
@@ -213,6 +219,11 @@ async def get_request(session: AsyncSession, request_id: str) -> agent.Dependent
         raise NotFoundError("No such request.")
     family = await session.scalar(select(Family).where(Family.id == request.family_id))
     assert family is not None
+    guardian = await session.get(User, family.guardian_user_id)
+    assert guardian is not None
+    # The latest verified approval: exactly this amount may pass the per-request max, the
+    # weekly cap and review. The engine re-verifies the signature before any money moves.
+    approvals = await verified_approvals(session, family.id, guardian.wallet_address, request.id)
 
     messages = list(
         await session.scalars(
@@ -232,6 +243,8 @@ async def get_request(session: AsyncSession, request_id: str) -> agent.Dependent
         amount_requested=request.amount_requested,
         emergency_claimed=request.emergency_claimed,
         already_sent=request.already_sent,
+        already_pending=await pending_amount(session, request.id),
+        guardian_approved_amount=approvals[-1] if approvals else None,
         thread=[
             agent.ThreadMessage(role=m.role.value, text=m.text, at=m.created_at)
             for m in reversed(messages)

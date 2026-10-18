@@ -131,6 +131,10 @@ def test_happy_path_clears() -> None:
         ),
         ({"request": RequestFacts(DEP, None, 0, False)}, "no amount requested"),
         ({"request": RequestFacts(DEP, 10 * AUSD, 5 * AUSD, False)}, "over requested amount"),
+        (
+            {"request": RequestFacts(DEP, 10 * AUSD, 0, False, already_pending=3 * AUSD)},
+            "over requested amount",
+        ),
         ({"instruction": instruction(amount=25 * AUSD)}, "auditor verdict required"),
         ({"proofs": [None]}, "unknown proof"),
         ({"proofs": [proof(request_id="r2")]}, "proof not for this request"),

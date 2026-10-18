@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Only verified captures count as proof; must match the agent's AGENT_CAMERA_ONLY_PROOFS.
     camera_only_proofs: bool = False
 
+    # How often pending transfers (crypto layer down at send time) are retried by their key.
+    pending_retry_seconds: int = Field(default=60, gt=0)
+
     rate_limit_per_min: int = Field(default=30, gt=0)
     llm_token_budget_per_family_per_day: int = Field(default=200_000, ge=0)
 

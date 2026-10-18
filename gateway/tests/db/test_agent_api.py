@@ -3,11 +3,13 @@ from typing import Any
 
 import httpx
 import pytest
+from nacl.signing import SigningKey
 
 from gateway.contracts import agent
 from gateway.db.models import Message
 from gateway.enums import ThreadRole
 from tests.conftest import TEST_ENV
+from tests.db.test_engine_transfers import TestGuardianOverride
 from tests.db.world import AUSD, World
 
 MAKER = {"Authorization": f"Bearer {TEST_ENV['PLATFORM_MAKER_TOKEN']}"}
@@ -260,3 +262,33 @@ class TestWrites:
         assert first.json()["id"] == again.json()["id"]
         event = {"kind": "guardrails", "subject_id": "r1", "detail": {"events": ["x"]}}
         assert (await client.post("/agent/v1/events", headers=MAKER, json=event)).status_code == 200
+
+
+class TestRequestMoneyState:
+    """Agent handoff items 1 and 3: the agent sees pending money and verified approvals."""
+
+    async def test_pending_amount_is_exposed(self, client: httpx.AsyncClient, world: World) -> None:
+        world.crypto.mode = "unavailable"
+        request = await world.add_request(10 * AUSD)
+        body = transfer_body(world, str(request.id))
+        result = await client.post(
+            "/agent/v1/transfers",
+            headers=MAKER | {"Idempotency-Key": body["idempotency_key"]},
+            json=body,
+        )
+        assert result.json()["status"] == "pending"
+        got = (await client.get(f"/agent/v1/requests/{request.id}", headers=MAKER)).json()
+        assert (got["already_sent"], got["already_pending"]) == (0, 8 * AUSD)
+
+    async def test_only_a_verified_approval_is_exposed(
+        self, client: httpx.AsyncClient, world: World
+    ) -> None:
+        signed, forged = await world.add_request(45 * AUSD), await world.add_request(45 * AUSD)
+        await TestGuardianOverride().ask_and_answer(world, signed, 45 * AUSD)
+        await TestGuardianOverride().ask_and_answer(
+            world, forged, 45 * AUSD, key=SigningKey.generate()
+        )
+        approved = (await client.get(f"/agent/v1/requests/{signed.id}", headers=MAKER)).json()
+        unapproved = (await client.get(f"/agent/v1/requests/{forged.id}", headers=MAKER)).json()
+        assert approved["guardian_approved_amount"] == 45 * AUSD
+        assert unapproved["guardian_approved_amount"] is None

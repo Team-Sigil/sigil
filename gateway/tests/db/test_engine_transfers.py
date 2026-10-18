@@ -82,7 +82,11 @@ async def test_unknown_signer_outcome_keeps_the_reservation_until_a_retry(world:
     world.crypto.mode = "unavailable"
     request = await world.add_request(10 * AUSD)
     result = await world.engine.submit(world.instruction(request))
-    assert result.reason == SIGNER_UNAVAILABLE
+    assert (result.status, result.amount, result.reason) == (
+        "pending",
+        8 * AUSD,
+        SIGNER_UNAVAILABLE,
+    )
     assert (await world.budget()).reserved == 8 * AUSD
 
     world.crypto.mode = "confirm"
@@ -91,6 +95,34 @@ async def test_unknown_signer_outcome_keeps_the_reservation_until_a_retry(world:
     assert [c.idempotency_key for c in world.crypto.calls] == [f"req:{request.id}:1"] * 2
     budget = await world.budget()
     assert (budget.spent, budget.reserved) == (8 * AUSD, 0)
+
+
+async def test_pending_transfer_cannot_be_paid_twice(world: World) -> None:
+    """Agent handoff item 1 (P0): signer down, first transfer pending; the agent's next run
+    has a new key and is blocked; the retry job then sends the first exactly once."""
+    world.crypto.mode = "unavailable"
+    request = await world.add_request(10 * AUSD)
+    first = await world.engine.submit(
+        world.instruction(request, idempotency_key=f"req:{request.id}:1")
+    )
+    assert first.status == "pending"
+
+    # The dependent writes again: the thread grew, so the agent's key changed.
+    second = await world.engine.submit(
+        world.instruction(request, idempotency_key=f"req:{request.id}:3")
+    )
+    assert (second.status, second.reason) == ("blocked", "over requested amount")
+
+    world.crypto.mode = "confirm"
+    retried = await world.engine.retry_pending()
+    assert [(r.status, r.decision_id) for _, r in retried] == [("sent", first.decision_id)]
+    assert await world.engine.retry_pending() == []  # nothing left pending
+    assert len(world.crypto.signatures) == 1  # signed once
+    budget = await world.budget()
+    assert (budget.spent, budget.reserved) == (8 * AUSD, 0)
+    async with world.sessionmaker() as session:
+        stored = await session.get(Request, request.id)
+        assert stored is not None and stored.already_sent == 8 * AUSD
 
 
 async def test_tampered_policy_blocks_every_transfer(world: World) -> None:

@@ -17,7 +17,7 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -86,6 +86,43 @@ def usable_delegation(delegation: Delegation, agent_wallet: str, guardian_wallet
     if delegation.owner != guardian_wallet or delegation.delegate != agent_wallet:
         return 0
     return delegation.delegated_amount_units
+
+
+async def verified_approvals(
+    session: AsyncSession, family_id: uuid.UUID, guardian_wallet: str, request_id: uuid.UUID
+) -> list[int]:
+    """Amounts the guardian approved for this request with a valid wallet signature, oldest
+    first (SPEC SEC-05). What anyone says in chat never counts."""
+    questions = await session.scalars(
+        select(GuardianQuestion)
+        .where(
+            GuardianQuestion.family_id == family_id,
+            GuardianQuestion.request_id == request_id,
+            GuardianQuestion.status == QuestionStatus.ANSWERED,
+            GuardianQuestion.decision == GuardianDecision.APPROVE,
+        )
+        .order_by(GuardianQuestion.answered_at)
+    )
+    amounts = []
+    for q in questions:
+        if q.signature is None or q.answer_nonce is None or q.approved_amount is None:
+            continue
+        message = answer_question_message(
+            family_id, q.id, GuardianDecision.APPROVE, q.approved_amount, q.answer_nonce
+        )
+        if verify_ed25519(guardian_wallet, message, q.signature):
+            amounts.append(q.approved_amount)
+    return amounts
+
+
+async def pending_amount(session: AsyncSession, request_id: uuid.UUID) -> int:
+    """Money cleared for this request whose outcome is not known yet."""
+    total = await session.scalar(
+        select(func.coalesce(func.sum(Transfer.amount), 0)).where(
+            Transfer.request_id == request_id, Transfer.status == TransferStatus.PENDING
+        )
+    )
+    return int(total or 0)
 
 
 def parse_uuid(value: str | None) -> uuid.UUID | None:
@@ -299,6 +336,7 @@ class TransferEngine:
                     amount_requested=request.amount_requested,
                     already_sent=request.already_sent,
                     emergency_claimed=request.emergency_claimed,
+                    already_pending=await pending_amount(session, request.id),
                 )
 
         verdict_row, verdict_facts = None, None
@@ -346,8 +384,11 @@ class TransferEngine:
         )
 
         override = False
-        if t.trigger == "request" and request_facts is not None:
-            override = await self._guardian_approved(session, found, request_uuid, t.amount)
+        if t.trigger == "request" and request_facts is not None and request_uuid is not None:
+            approved = await verified_approvals(
+                session, family.id, found.guardian_wallet, request_uuid
+            )
+            override = t.amount in approved
 
         facts = TransferFacts(
             instruction=t,
@@ -385,31 +426,6 @@ class TransferEngine:
         )
         return verify_ed25519(found.guardian_wallet, message, row.guardian_signature)
 
-    @staticmethod
-    async def _guardian_approved(
-        session: AsyncSession, found: FamilyRow, request_id: uuid.UUID | None, amount: int
-    ) -> bool:
-        """True only for a wallet-signed approval of exactly this amount for this request
-        (SPEC SEC-05). What anyone says in chat never counts."""
-        questions = await session.scalars(
-            select(GuardianQuestion).where(
-                GuardianQuestion.family_id == found.family.id,
-                GuardianQuestion.request_id == request_id,
-                GuardianQuestion.status == QuestionStatus.ANSWERED,
-                GuardianQuestion.decision == GuardianDecision.APPROVE,
-                GuardianQuestion.approved_amount == amount,
-            )
-        )
-        for q in questions:
-            if q.signature is None or q.answer_nonce is None:
-                continue
-            message = answer_question_message(
-                found.family.id, q.id, GuardianDecision.APPROVE, amount, q.answer_nonce
-            )
-            if verify_ed25519(found.guardian_wallet, message, q.signature):
-                return True
-        return False
-
     async def _store_blocked(
         self, t: TransferInstruction, family_id: uuid.UUID, reason: str
     ) -> TransferResult:
@@ -439,6 +455,19 @@ class TransferEngine:
             return TransferResult(status="blocked", decision_id=str(transfer.id), reason=reason)
 
     # --- send and settle ----------------------------------------------------------------------
+
+    async def retry_pending(self) -> list[tuple[uuid.UUID, TransferResult]]:
+        """Finishes every pending transfer by its own idempotency key; the crypto layer never
+        signs a key twice. Returns (family id, result) per transfer."""
+        async with self._sessionmaker() as session:
+            rows = (
+                await session.execute(
+                    select(Transfer.id, Transfer.family_id)
+                    .where(Transfer.status == TransferStatus.PENDING)
+                    .order_by(Transfer.created_at)
+                )
+            ).all()
+        return [(family_id, await self._send(transfer_id)) for transfer_id, family_id in rows]
 
     async def _replay(self, existing: Transfer) -> TransferResult:
         if existing.status == TransferStatus.SENT:
@@ -479,10 +508,14 @@ class TransferEngine:
         try:
             response = await self._crypto.transfer(request)
         except CryptoUnavailableError:
-            # Outcome unknown: keep the reservation and the pending row; a replay retries.
+            # Outcome unknown: it may still go out, so it is never reported as blocked. The
+            # reservation and the pending row stay; the retry job (or a replay) finishes it.
             logger.warning("Crypto layer unavailable for transfer %s", transfer.id)
             return TransferResult(
-                status="blocked", decision_id=str(transfer.id), reason=SIGNER_UNAVAILABLE
+                status="pending",
+                decision_id=str(transfer.id),
+                amount=transfer.amount,
+                reason=SIGNER_UNAVAILABLE,
             )
         confirmed = response.status == CryptoTransferStatus.CONFIRMED and response.tx_signature
         return await self._settle(
