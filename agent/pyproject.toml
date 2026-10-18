@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "uvicorn>=0.30"]
+dev = ["pytest>=8", "uvicorn>=0.30", "httpie>=3.2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

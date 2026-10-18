@@ -100,5 +100,8 @@ PLATFORM_MAKER_TOKEN=maker-test-token PLATFORM_AUDITOR_TOKEN=auditor-test-token 
 AGENT_INBOUND_TOKEN=change-me python -m agent_layer   # agent service on :8100
 ```
 
+[walkthrough.md](walkthrough.md) drives both services step by step with HTTPie. Every
+command in it is also a test (`pytest tests/test_walkthrough.py`).
+
 Optional settings: `AGENT_MAKER_MODEL`, `AGENT_AUDITOR_MODEL` (both default to
 `claude-opus-5-5`), `AGENT_MAKER_EFFORT`, `AGENT_AUDITOR_EFFORT`, `AGENT_SCHEDULER=0`.
