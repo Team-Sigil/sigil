@@ -8,7 +8,9 @@ from gateway.agent_api.routes import router as agent_router
 from gateway.agent_client import AgentService, HttpAgentClient
 from gateway.app_api.auth import router as auth_router
 from gateway.app_api.families import router as families_router
+from gateway.app_api.guardian import router as guardian_router
 from gateway.app_api.policy import router as policy_router
+from gateway.app_api.requests import router as requests_router
 from gateway.contracts.crypto import CryptoClient
 from gateway.core.config import Settings, get_settings
 from gateway.core.errors import install_error_handlers
@@ -64,6 +66,8 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(families_router)
     app.include_router(policy_router)
+    app.include_router(requests_router)
+    app.include_router(guardian_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:
