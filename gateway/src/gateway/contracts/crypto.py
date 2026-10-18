@@ -7,7 +7,7 @@ Every request carries `X-Timestamp`, `X-Nonce` and `X-Signature` (HMAC-SHA256 ov
 """
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,3 +49,14 @@ class Delegation(BaseModel):
     token_account: str = Field(max_length=44)
     delegate: str | None = Field(default=None, max_length=44)
     delegated_amount_units: Annotated[int, Field(strict=True, ge=0)]
+
+
+class CryptoUnavailableError(Exception):
+    """The crypto layer could not be reached, refused the request, or answered outside this
+    contract. The outcome of a transfer call is then unknown."""
+
+
+class CryptoClient(Protocol):
+    async def get_delegation(self, token_account: str) -> Delegation: ...
+
+    async def transfer(self, request: CryptoTransferRequest) -> CryptoTransferResponse: ...
