@@ -67,7 +67,13 @@ What this means for your app:
 - **Store the amount the dependent asked for** on the request. The agent never sends
   more than was asked.
 - **Let dependents attach a receipt, quote or photo.** Amounts at or above the
-  guardian's proof threshold are never sent without one.
+  guardian's proof threshold are never sent without one. The agent looks at the first
+  3 proofs on a request. Each must be JPEG, PNG, WebP, GIF (first frame only) or plain
+  text, and at most 5 MB; anything else is skipped. Limit uploads to 3 in your app, so
+  that no proof is silently ignored. See [proof-images.md](proof-images.md) for planned
+  upload rules.
+- **Keep messages short.** The agent reads the first 2,000 characters of each
+  dependent message and the last 20 messages of a conversation.
 - **Pass the dependent's words through unchanged.** Don't add text such as "approved
   by parent": the agent treats everything the dependent wrote as their claim, and only a
   guardian's wallet-signed answer counts as approval.
@@ -307,7 +313,7 @@ Errors return a JSON body with a `detail` field, except `500`, which returns pla
 | `401` | `"unauthorized"` | Missing or wrong token | No; fix the token |
 | `404` | `"unknown job"` (or `"Not Found"`) | Unknown job name or path | No |
 | `422` | `"invalid request id"` or a validation list | Bad identifier, missing or extra field, wrong type | No; fix the request |
-| `502` | `"platform API unavailable"` | The agent could not read from or write to the platform API. **This currently includes a `request_id` the platform doesn't know.** | Yes, with backoff, if you're sure the request exists |
+| `502` | `"platform API unavailable"` | The agent could not read from or write to the platform API, or the platform sent data outside its contract (too large, malformed, over a length limit). **This currently includes a `request_id` the platform doesn't know.** | Yes, with backoff, if you're sure the request exists. A contract violation fails again on retry: report it to the platform team |
 | `500` | Plain text `Internal Server Error` | Unexpected failure | Yes, with backoff |
 
 A `422` validation body looks like this:

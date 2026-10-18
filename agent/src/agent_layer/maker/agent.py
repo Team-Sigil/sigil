@@ -41,6 +41,7 @@ from agent_layer.contracts import (
 )
 from agent_layer.guardrails.budget import BudgetExhausted, TokenBudget
 from agent_layer.guardrails.events import GuardrailLog
+from agent_layer.guardrails.input import PlatformText
 from agent_layer.guardrails.output import RunFacts, check_reply, reconcile_outcome, safe_reply
 from agent_layer.guardrails.tools import Mode, ToolGuard, ToolRejected
 from agent_layer.llm import LLM, LLMUnavailable
@@ -114,10 +115,12 @@ class MakerAgent:
         ctx = self._api.get_context(dependent_id)
         log = GuardrailLog()
         usual = to_display(ctx.policy.allowance.amount) if ctx.policy.allowance else "not set"
-        text = f"{context_block(ctx)}\n\n{ALLOWANCE_INSTRUCTION.format(usual=usual)}"
+        pt = PlatformText(log)
+        text = f"{context_block(ctx, self._limits, pt)}\n\n{ALLOWANCE_INSTRUCTION.format(usual=usual)}"
         prepared = PreparedInput(
             content=[{"type": "text", "text": text}],
             case_text=f"Scheduled weekly allowance (usual amount {usual}).",
+            signals=pt.signals,
         )
         run = self._new_run(
             ctx, "allowance", None, prepared, idempotency_key=f"allowance:{dependent_id}:{period_key}", log=log
@@ -346,9 +349,14 @@ class MakerAgent:
                 run.log.add("idempotent_replay", run.idempotency_key)
             return f"Sent {to_display(result.amount)}. Call finish."
         run.transfer_blocked = True
-        run.log.add("engine_blocked", result.reason or "")
+        reason = PlatformText(run.log).inline(
+            result.reason or "outside the limits",
+            max_chars=self._limits.max_platform_reason_chars,
+            source="engine_reason",
+        )
+        run.log.add("engine_blocked", reason)
         raise ToolRejected(
-            f"The platform blocked this transfer: {result.reason or 'outside the limits'}. "
+            f"The platform blocked this transfer: {reason}. "
             "Explain this to the dependent and offer an alternative."
         )
 

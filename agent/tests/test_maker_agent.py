@@ -248,7 +248,7 @@ def test_follow_up_turn_uses_a_new_idempotency_key(platform, make_agent, add_req
 def test_images_are_sent_as_image_blocks_and_oversized_proofs_skipped(platform, make_agent, add_request):
     add_request(amount=10, proofs=[ProofRef(id="img", media_type="image/png"),
                                    ProofRef(id="big", media_type="image/png")])
-    platform.add_proof(Proof(id="img", media_type="image/png", size_bytes=10, data_b64="iVBORw0KGgo="))
+    platform.add_proof(Proof(id="img", media_type="image/png", size_bytes=8, data_b64="iVBORw0KGgo="))
     platform.add_proof(Proof(id="big", media_type="image/png", size_bytes=50_000_000, data_b64="iVBORw0KGgo="))
     agent, maker, _ = make_agent([reply(finish("declined", "Not this time."))])
     record = agent.handle_request("r1")

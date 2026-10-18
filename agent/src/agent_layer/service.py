@@ -45,7 +45,7 @@ def build_runtime(
     )
     maker_api = maker_api or MakerAPI(settings.platform_base_url, settings.maker_token)
     auditor_api = auditor_api or AuditorAPI(settings.platform_base_url, settings.auditor_token)
-    maker = MakerAgent(maker_llm, maker_api, Auditor(auditor_llm, auditor_api), settings.limits)
+    maker = MakerAgent(maker_llm, maker_api, Auditor(auditor_llm, auditor_api, settings.limits), settings.limits)
     return AgentRuntime(settings, maker_api, maker_llm, maker, Jobs(maker, maker_api, maker_llm))
 
 

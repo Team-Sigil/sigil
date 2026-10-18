@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -31,6 +31,16 @@ class _Lenient(BaseModel):
     """Responses from the platform: ignore unknown fields so the API can grow."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
+
+
+# Hard ceilings on platform responses. They sit well above the guardrail limits in
+# ``config.Limits``, which truncate; a response over a ceiling is rejected outright and
+# the run fails closed, because no honest platform sends it.
+MAX_TEXT = 64_000  # a message, thread message or text proof
+MAX_SHORT_TEXT = 2_000  # a purpose, reason, name or validation error
+MAX_GUIDANCE = 16_000
+MAX_ITEMS = 1_000  # history, activity and thread entries
+MAX_PROOF_B64 = 8 * 1024 * 1024  # base64 of a proof at the 5 MB limit is ~6.7 MB
 
 
 class Category(StrEnum):
@@ -81,14 +91,14 @@ class PolicyView(_Lenient):
     """The signed policy as the engine exposes it to the agent (read-only)."""
 
     version: int
-    policy_hash: str
+    policy_hash: str = Field(max_length=200)
     weekly_cap: int = Field(ge=0)
     max_per_request: int = Field(ge=0)
     blocked_categories: list[Category] = []
     proof_threshold: int = Field(ge=0)
     review_threshold: int | None = Field(default=None, ge=0)
     allowance: AllowanceRule | None = None
-    guidance: str = ""
+    guidance: str = Field(default="", max_length=MAX_GUIDANCE)
 
 
 class Budget(_Lenient):
@@ -102,23 +112,23 @@ class HistoryItem(_Lenient):
     kind: Literal["transfer", "declined", "blocked", "asked_guardian", "auditor_flagged"]
     amount: int = Field(ge=0)
     category: Category
-    purpose: str = ""
+    purpose: str = Field(default="", max_length=MAX_SHORT_TEXT)
 
 
 class AgentContext(_Lenient):
     dependent_id: str
     guardian_id: str
-    dependent_name: str
+    dependent_name: str = Field(max_length=MAX_SHORT_TEXT)
     policy: PolicyView
     budget: Budget
     delegated_amount: int = Field(ge=0)
     frozen: bool = False
-    history: list[HistoryItem] = []
+    history: list[HistoryItem] = Field(default=[], max_length=MAX_ITEMS)
 
 
 class ThreadMessage(_Lenient):
     role: Literal["dependent", "agent", "guardian_answer", "system_event"]
-    text: str
+    text: str = Field(max_length=MAX_TEXT)
     at: datetime
 
 
@@ -131,20 +141,20 @@ class ProofRef(_Lenient):
 class DependentRequest(_Lenient):
     id: str
     dependent_id: str
-    message: str
+    message: str = Field(max_length=MAX_TEXT)
     amount_requested: int | None = Field(default=None, gt=0)
     emergency_claimed: bool = False
     already_sent: int = Field(default=0, ge=0)
-    thread: list[ThreadMessage] = []
-    proofs: list[ProofRef] = []
+    thread: list[ThreadMessage] = Field(default=[], max_length=MAX_ITEMS)
+    proofs: list[ProofRef] = Field(default=[], max_length=50)
 
 
 class Proof(_Lenient):
     id: str
     media_type: str
     size_bytes: int = Field(ge=0)
-    data_b64: str | None = None
-    text: str | None = None
+    data_b64: str | None = Field(default=None, max_length=MAX_PROOF_B64)
+    text: str | None = Field(default=None, max_length=MAX_TEXT)
 
 
 class DependentSummary(_Lenient):
@@ -164,13 +174,13 @@ class GuardianAnswer(_Lenient):
 class WeeklyActivity(_Lenient):
     dependent_id: str
     week_start: date
-    items: list[HistoryItem] = []
+    items: list[HistoryItem] = Field(default=[], max_length=MAX_ITEMS)
     weekly_cap: int = Field(ge=0)
 
 
 class PolicyDraftValidation(_Lenient):
     valid: bool
-    errors: list[str] = []
+    errors: list[Annotated[str, Field(max_length=MAX_SHORT_TEXT)]] = Field(default=[], max_length=50)
 
 
 # -------------------------------------------------------------------------- writes
@@ -197,7 +207,7 @@ class TransferResult(_Lenient):
     status: Literal["sent", "blocked", "duplicate"]
     decision_id: str
     amount: int = 0
-    reason: str | None = None
+    reason: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
     tx_signature: str | None = None
 
 

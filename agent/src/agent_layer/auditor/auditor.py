@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from agent_layer.auditor.prompts import AUDITOR_SYSTEM, PHASE1_INSTRUCTION, PHASE2_INSTRUCTION
+from agent_layer.config import Limits
 from agent_layer.contracts import (
     AgentContext,
     AuditorVerdict,
@@ -21,8 +22,9 @@ from agent_layer.contracts import (
 )
 from agent_layer.guardrails.budget import BudgetExhausted, TokenBudget
 from agent_layer.guardrails.events import GuardrailLog
-from agent_layer.guardrails.input import wrap_untrusted
+from agent_layer.guardrails.input import PlatformText, wrap_untrusted
 from agent_layer.llm import LLM, LLMUnavailable
+from agent_layer.maker.context import dependent_name, guidance_block, history_lines
 from agent_layer.money import to_display
 from agent_layer.platform_api import AuditorAPI, PlatformAPIError
 
@@ -60,42 +62,43 @@ def _flag(reason: str) -> AuditorVerdict:
 
 
 class Auditor:
-    def __init__(self, llm: LLM, api: AuditorAPI):
+    def __init__(self, llm: LLM, api: AuditorAPI, limits: Limits | None = None):
         self._llm = llm
         self._api = api
+        self._limits = limits or Limits()
 
-    def _case_message(self, case: ReviewCase) -> str:
-        ctx, p = case.ctx, case.ctx.policy
-        history = "\n".join(
-            f"- {h.at:%a %d %b}: {h.kind} {to_display(h.amount)} ({h.category}) {h.purpose}"
-            for h in ctx.history[-15:]
-        ) or "- (none)"
+    def _case_message(self, case: ReviewCase, pt: PlatformText) -> str:
+        ctx, p, limits = case.ctx, case.ctx.policy, self._limits
         proofs = "\n".join(
             wrap_untrusted("untrusted_proof", t, index=str(i)) for i, t in enumerate(case.proof_texts)
         ) or ("(see attached images)" if case.proof_images else "(no proof provided)")
         return (
-            f"Dependent: {ctx.dependent_name}\n"
+            f"Dependent: {dependent_name(ctx, limits, pt)}\n"
             f"Why you are reviewing: {', '.join(case.triggers)}\n\n"
-            f"<guardian_guidance>\n{p.guidance or '(none given)'}\n</guardian_guidance>\n\n"
+            f"{guidance_block(ctx, limits, pt)}\n\n"
             f"Weekly cap {to_display(p.weekly_cap)}, spent this week "
             f"{to_display(ctx.budget.spent_this_week)}, left {to_display(ctx.budget.remaining_this_week)}.\n"
-            f"Recent history:\n{history}\n\n"
+            f"Recent history:\n{history_lines(ctx, limits, pt)}\n\n"
             f"The request:\n{case.case_text}\n\nProof:\n{proofs}\n\n{PHASE1_INSTRUCTION}"
         )
 
-    def _decision_message(self, case: ReviewCase) -> str:
+    def _decision_message(self, case: ReviewCase, pt: PlatformText) -> str:
+        # The maker is untrusted too: its purpose and reasoning are escaped like input.
+        purpose = pt.inline(case.purpose, max_chars=self._limits.max_purpose_chars, source="maker_purpose")
         return (
             "The maker decided to send "
             f"{to_display(case.amount)} as category '{case.category}' "
-            f"(confidence {case.category_confidence:.2f}) for: {case.purpose}\n"
-            f"<maker_reasoning>\n{case.maker_reasoning}\n</maker_reasoning>\n\n{PHASE2_INSTRUCTION}"
+            f"(confidence {case.category_confidence:.2f}) for: {purpose}\n"
+            + wrap_untrusted("maker_reasoning", case.maker_reasoning)
+            + f"\n\n{PHASE2_INSTRUCTION}"
         )
 
     def review(self, case: ReviewCase, budget: TokenBudget, log: GuardrailLog) -> ReviewResult:
         assessment: IndependentAssessment | None = None
+        pt = PlatformText(log)
         try:
             budget.ensure_available()
-            content = [*case.proof_images, {"type": "text", "text": self._case_message(case)}]
+            content = [*case.proof_images, {"type": "text", "text": self._case_message(case, pt)}]
             messages: list[dict] = [{"role": "user", "content": content}]
             first = self._llm.parse(system=AUDITOR_SYSTEM, messages=messages, output_format=IndependentAssessment)
             budget.record(first.response)
@@ -105,7 +108,7 @@ class Auditor:
 
             messages += [
                 {"role": "assistant", "content": first.response.content},
-                {"role": "user", "content": self._decision_message(case)},
+                {"role": "user", "content": self._decision_message(case, pt)},
             ]
             second = self._llm.parse(system=AUDITOR_SYSTEM, messages=messages, output_format=AuditorVerdict)
             budget.record(second.response)

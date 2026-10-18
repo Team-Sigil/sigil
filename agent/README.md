@@ -178,6 +178,15 @@ sequenceDiagram
 4. **No guardian answers in threads.** `guardian_answer` messages exist in the contract,
    but neither the mock nor its admin routes can add one, so "the guardian answered, now
    continue" isn't testable end to end.
+5. **No image dimension or content checks.** The agent checks a proof's type label,
+   base64 and exact size, but cannot read dimensions or confirm the bytes match
+   `media_type`, and nothing strips EXIF/GPS metadata. Proposal: the platform normalises
+   images at upload. See [proof-images.md](proof-images.md).
+6. **Proof images are re-sent and re-billed on every model turn.** Only the system
+   prompt is cached. A cache breakpoint on the first user turn would make re-sends
+   cache reads. See [proof-images.md](proof-images.md).
+7. **No body size limit on the inbound API.** FastAPI/uvicorn read the whole request
+   body before validating it. Set a limit in the gateway or a reverse proxy.
 
 ### Differences from the architecture doc
 
@@ -209,6 +218,9 @@ firewall, no DB credentials in the agent's environment).
 | Input | Unicode normalisation, hidden/zero-width characters stripped, length caps, thread and proof caps | `guardrails/input.py`, `maker/context.py` |
 | Input | Dependent text and proofs wrapped in `<untrusted_…>` tags that cannot be closed from inside (HTML-escaped) | `guardrails/input.py` |
 | Input | Injection signals (instruction override, claimed guardian approval, role play, authority claims, urgency, wallet addresses) are shown to the model and **force an Auditor review**; they never block on their own | `guardrails/input.py`, `auditor/triggers.py` |
+| Platform | Responses over 8 MB, invalid JSON or outside the contract (hard length ceilings on every text field and list) raise `PlatformAPIError`: the run fails closed | `platform_api.py`, `contracts.py` |
+| Platform | Zero trust: platform text in a prompt (guidance, names, history purposes, verified guardian answers, events, engine reasons, and the maker's reasoning shown to the Auditor) is capped, stripped and escaped like user input; inline fields are collapsed to one line | `guardrails/input.py` (`PlatformText`), `maker/context.py` |
+| Platform | A trusted channel that needed fixing (hidden characters, oversized, markup), or a proof whose bytes don't match its declared size, adds `platform_text_anomaly` and **forces an Auditor review** | `guardrails/input.py`, `maker/context.py` |
 | Tools | Allowlisted tools per mode; strict Pydantic arguments (`extra="forbid"`, so no recipient can be added); display amounts with max 2 decimals converted to integer base units | `guardrails/tools.py`, `contracts.py` |
 | Tools | Pre-checks before any API call: frozen, blocked category, per-request max, weekly budget, reservoir, not more than requested, proof threshold, allowance ceiling (1.5× usual) | `guardrails/tools.py` |
 | Tools | Per-run limits: 1 transfer, 1 guardian question, 10 tool calls, 8 model turns | `config.py` |
@@ -256,6 +268,17 @@ All under `/agent/v1`, bearer-authenticated. Money is integer base units (6 deci
 The engine must refuse a transfer that needs review (`auditor.triggers.trusted_triggers`)
 unless it carries an unused `agree` verdict bound to the same idempotency key, amount and
 category. `mock_platform/app.py` implements this as a reference.
+
+Responses must stay within the contract, or the agent fails closed (`PlatformAPIError`,
+so `502` to the gateway, and no model call):
+
+- A response body of at most ~8 MB (one proof at the 5 MB limit, base64-encoded).
+- Valid JSON that matches `contracts.py`, including its hard length ceilings
+  (`MAX_TEXT`, `MAX_SHORT_TEXT`, `MAX_GUIDANCE`, `MAX_ITEMS`, `MAX_PROOF_B64`).
+- For an image proof, `size_bytes` equal to the decoded length of `data_b64`. A mismatch
+  skips the proof and forces an Auditor review.
+
+Proof image requirements and open questions: [proof-images.md](proof-images.md).
 
 ## Inbound API (called by the gateway)
 

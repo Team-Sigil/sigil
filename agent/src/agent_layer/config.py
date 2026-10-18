@@ -26,6 +26,14 @@ class Limits:
     max_guardian_questions_per_run: int = 1
     max_reply_chars: int = 600
     max_summary_chars: int = 2_500
+    # Platform-sourced text that reaches a prompt (zero trust: capped like user input).
+    max_guidance_chars: int = 4_000
+    max_name_chars: int = 80
+    max_purpose_chars: int = 200
+    max_history_items: int = 15
+    max_guardian_answer_chars: int = 1_000
+    max_event_chars: int = 300
+    max_platform_reason_chars: int = 300
     # Fraction of the weekly cap used as the review threshold when the guardian set none.
     default_review_fraction: float = 0.25
 

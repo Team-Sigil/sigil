@@ -10,15 +10,19 @@ Two credentials, two clients:
   the engine decides whether they happen.
 * ``AuditorAPI`` – used only by the Auditor. Its single write is posting a verdict, so
   a compromised maker (holding only the maker token) cannot forge an "agree".
+
+Responses are not trusted either: a body over ``MAX_RESPONSE_BYTES``, invalid JSON or
+anything outside the contract raises ``PlatformAPIError``, so the run fails closed.
 """
 
 from __future__ import annotations
 
+import json as jsonlib
 import re
 from typing import Any, TypeVar
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from agent_layer.contracts import (
     AgentContext,
@@ -47,6 +51,9 @@ from agent_layer.contracts import (
 T = TypeVar("T", bound=BaseModel)
 
 ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# The largest legitimate response is one proof at the 5 MB limit, base64-encoded.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024 + 64 * 1024
 
 
 class PlatformAPIError(RuntimeError):
@@ -82,6 +89,35 @@ class _Client:
     def close(self) -> None:
         self._http.close()
 
+    def _send(self, method: str, path: str, *, body: Any = None, headers: dict[str, str] | None = None) -> bytes:
+        """Send one request and read at most ``MAX_RESPONSE_BYTES`` of the body."""
+        request = self._http.build_request(method, path, json=body, headers=headers)
+        resp = self._http.send(request, stream=True)
+        try:
+            declared = resp.headers.get("content-length")
+            if declared and declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
+                raise PlatformAPIError(resp.status_code, "response too large")
+            chunks: list[bytes] = []
+            size = 0
+            for chunk in resp.iter_bytes():
+                size += len(chunk)
+                if size > MAX_RESPONSE_BYTES:
+                    raise PlatformAPIError(resp.status_code, "response too large")
+                chunks.append(chunk)
+        finally:
+            resp.close()
+        content = b"".join(chunks)
+        if resp.status_code >= 400:
+            raise PlatformAPIError(resp.status_code, content[:300].decode(errors="replace"))
+        return content
+
+    @staticmethod
+    def _parse(content: bytes, adapter: TypeAdapter) -> Any:
+        try:
+            return adapter.validate_python(jsonlib.loads(content))
+        except (ValueError, ValidationError) as exc:  # JSONDecodeError is a ValueError
+            raise PlatformAPIError(None, f"response outside the contract: {type(exc).__name__}") from exc
+
     def _request(
         self,
         method: str,
@@ -96,23 +132,19 @@ class _Client:
         last_exc: Exception | None = None
         for _ in range(retries + 1):
             try:
-                resp = self._http.request(method, path, json=body, headers=headers)
+                content = self._send(method, path, body=body, headers=headers)
             except httpx.TransportError as exc:
                 last_exc = exc
                 continue
-            if resp.status_code >= 400:
-                raise PlatformAPIError(resp.status_code, resp.text[:300])
-            return model.model_validate(resp.json())
+            return self._parse(content, TypeAdapter(model))
         raise PlatformAPIError(None, f"transport failure: {last_exc}")
 
     def _list(self, path: str, model: type[T]) -> list[T]:
         try:
-            resp = self._http.get(path)
+            content = self._send("GET", path)
         except httpx.TransportError as exc:
             raise PlatformAPIError(None, f"transport failure: {exc}") from exc
-        if resp.status_code >= 400:
-            raise PlatformAPIError(resp.status_code, resp.text[:300])
-        return [model.model_validate(item) for item in resp.json()]
+        return self._parse(content, TypeAdapter(list[model]))
 
 
 class MakerAPI(_Client):
