@@ -38,6 +38,9 @@ from gateway.core.crypto import decrypt, encrypt
 from gateway.enums import (
     Audience,
     GuardianDecision,
+    InterviewRole,
+    InterviewStatus,
+    InterviewTurnKind,
     NoncePurpose,
     PolicyStatus,
     ProposalStatus,
@@ -197,6 +200,53 @@ class Policy(Base):
             postgresql_where=text("status = 'active'"),
         ),
         CheckConstraint("version > 0", name="version_positive"),
+    )
+
+
+class PolicyInterview(Base):
+    """The guardian's policy setup chat with the agent (protocol sigil.policy-interview/1).
+    The agent is stateless: the gateway stores the conversation and sends it every turn."""
+
+    __tablename__ = "policy_interviews"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    family_id: Mapped[uuid.UUID] = family_fk(index=False)
+    status: Mapped[InterviewStatus] = mapped_column(
+        str_enum(InterviewStatus, "interview_status"), server_default=InterviewStatus.OPEN.value
+    )
+    draft_policy_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("policies.id"))
+    created_at: Mapped[datetime] = created_at()
+
+    __table_args__ = (
+        # At most one open interview per family.
+        Index(
+            "uq_policy_interviews_one_open",
+            "family_id",
+            unique=True,
+            postgresql_where=text("status = 'open'"),
+        ),
+    )
+
+
+class PolicyInterviewTurn(Base):
+    """One turn, in order. Agent turns are stored exactly as the agent returned them, with
+    their `kind`; the app can never submit one."""
+
+    __tablename__ = "policy_interview_turns"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    interview_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("policy_interviews.id"))
+    position: Mapped[int] = mapped_column(Integer)
+    role: Mapped[InterviewRole] = mapped_column(str_enum(InterviewRole, "interview_role"))
+    text: Mapped[str] = mapped_column(EncryptedText)
+    kind: Mapped[InterviewTurnKind | None] = mapped_column(
+        str_enum(InterviewTurnKind, "interview_turn_kind")
+    )
+    created_at: Mapped[datetime] = created_at()
+
+    __table_args__ = (
+        UniqueConstraint("interview_id", "position", name="uq_policy_interview_turns_position"),
+        CheckConstraint("(role = 'agent') = (kind IS NOT NULL)", name="kind_only_on_agent_turns"),
     )
 
 

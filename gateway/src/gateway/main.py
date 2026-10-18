@@ -14,6 +14,7 @@ from gateway.app_api.auth import router as auth_router
 from gateway.app_api.capture import router as capture_router
 from gateway.app_api.families import router as families_router
 from gateway.app_api.guardian import router as guardian_router
+from gateway.app_api.interview import router as interview_router
 from gateway.app_api.policy import router as policy_router
 from gateway.app_api.reads import router as reads_router
 from gateway.app_api.requests import router as requests_router
@@ -110,6 +111,7 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(families_router)
     app.include_router(policy_router)
+    app.include_router(interview_router)
     app.include_router(requests_router)
     app.include_router(guardian_router)
     app.include_router(reads_router)

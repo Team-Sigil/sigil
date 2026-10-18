@@ -49,24 +49,69 @@ class AgentDecision(BaseModel):
     guardrail_events: list[str] = []
 
 
+INTERVIEW_PROTOCOL = "sigil.policy-interview/1"
+MAX_INTERVIEW_TURNS = 50
+
+TurnKind = Literal["question", "confirmation", "review"]
+
+
 class ChatTurn(BaseModel):
+    """One turn of the policy interview. Agent turns carry the `kind` the agent reported."""
+
     model_config = ConfigDict(extra="forbid")
 
     role: Literal["guardian", "agent"]
-    text: str = Field(min_length=1, max_length=4_000)
+    text: str = Field(max_length=4_000)
+    kind: TurnKind | None = None
 
 
-class DraftResult(BaseModel):
-    draft: PolicyDraft | None
-    validation: PolicyDraftValidation
+class ChecklistItem(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    name: str = Field(max_length=40)
+    label: str = Field(max_length=200)
+    kind: str = Field(max_length=20)
+    required: bool
+    status: str = Field(max_length=20)
+    summary: str = Field(default="", max_length=400)
+
+
+class InterviewProgress(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    required_total: int = Field(ge=0)
+    required_done: int = Field(ge=0)
+
+
+class InterviewTurn(BaseModel):
+    """The agent's reply to one interview turn (policy-protocol.md)."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    protocol: str
+    status: Literal["needs_input", "ready", "unavailable"]
+    phase: str = Field(max_length=20)
+    question: str | None = Field(default=None, max_length=4_000)
+    question_kind: TurnKind | None = None
+    checklist: list[ChecklistItem] = Field(default=[], max_length=50)
+    progress: InterviewProgress
+    draft: PolicyDraft | None = None
+    validation: PolicyDraftValidation | None = None
+    guardrail_events: list[str] = []
 
 
 class AgentService(Protocol):
     async def process_request(self, request_id: str) -> AgentDecision: ...
 
-    async def draft_policy(
-        self, guardian_id: str, dependent_id: str, conversation: list[ChatTurn]
-    ) -> DraftResult: ...
+    async def interview_turn(
+        self,
+        guardian_id: str,
+        dependent_id: str,
+        conversation: list[ChatTurn],
+        locale: str | None,
+    ) -> InterviewTurn: ...
+
+    async def interview_protocol(self, locale: str | None) -> dict[str, Any]: ...
 
 
 class HttpAgentClient:
@@ -103,25 +148,53 @@ class HttpAgentClient:
         except ValidationError as exc:
             raise _unavailable("decision outside the contract") from exc
 
-    async def draft_policy(
-        self, guardian_id: str, dependent_id: str, conversation: list[ChatTurn]
-    ) -> DraftResult:
+    async def interview_turn(
+        self,
+        guardian_id: str,
+        dependent_id: str,
+        conversation: list[ChatTurn],
+        locale: str | None,
+    ) -> InterviewTurn:
         data = await self._post(
-            "/v1/policy-drafts",
+            "/v1/policy-interviews/turn",
             {
                 "guardian_id": guardian_id,
                 "dependent_id": dependent_id,
-                "conversation": [turn.model_dump() for turn in conversation],
+                "conversation": [turn.model_dump(exclude_none=True) for turn in conversation],
+                "locale": locale,
             },
         )
         try:
             draft = data.get("draft")
             if isinstance(draft, dict):
                 # PolicyDraft forbids unknown fields; keep only the ones it knows.
-                draft = {k: v for k, v in draft.items() if k in PolicyDraft.model_fields}
-            return DraftResult(
-                draft=None if draft is None else PolicyDraft.model_validate(draft),
-                validation=PolicyDraftValidation.model_validate(data.get("validation")),
+                data = data | {
+                    "draft": {k: v for k, v in draft.items() if k in PolicyDraft.model_fields}
+                }
+            turn = InterviewTurn.model_validate(data)
+        except (ValidationError, AttributeError, TypeError) as exc:
+            raise _unavailable("interview turn outside the contract") from exc
+        if turn.protocol != INTERVIEW_PROTOCOL:
+            raise _unavailable(f"unsupported interview protocol {turn.protocol!r}")
+        if turn.status == "needs_input" and (not turn.question or turn.question_kind is None):
+            raise _unavailable("interview question without text or kind")
+        if turn.status == "ready" and turn.draft is None:
+            raise _unavailable("interview ready without a draft")
+        return turn
+
+    async def interview_protocol(self, locale: str | None) -> dict[str, Any]:
+        try:
+            response = await self._http.get(
+                "/v1/policy-interviews/protocol", params={"locale": locale} if locale else None
             )
-        except (ValidationError, AttributeError) as exc:
-            raise _unavailable("policy draft outside the contract") from exc
+        except httpx.HTTPError as exc:
+            raise _unavailable(f"transport failure: {type(exc).__name__}") from exc
+        if response.status_code != 200 or len(response.content) > MAX_RESPONSE_BYTES:
+            raise _unavailable(f"agent service answered {response.status_code}")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise _unavailable("agent service sent invalid JSON") from exc
+        if not isinstance(data, dict) or data.get("protocol") != INTERVIEW_PROTOCOL:
+            raise _unavailable("unsupported interview protocol")
+        return data

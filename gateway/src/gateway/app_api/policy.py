@@ -1,4 +1,5 @@
-"""Guardian policy setup (SPEC §16.1 steps 3-4): the agent drafts, the guardian signs.
+"""Guardian policy (SPEC §16.1 steps 3-4): drafts come from the policy interview
+(`interview.py`); the guardian signs one to activate it.
 
 Nothing the agent returns becomes a policy until the guardian's wallet signs the activation
 message over the draft's version and hash (SPEC SEC-04).
@@ -8,14 +9,14 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Request
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.agent_client import AgentService, ChatTurn
 from gateway.app_api import nonces
 from gateway.app_api.sessions import FamilyGuardianDep, MemberDep
-from gateway.contracts.agent import PolicyDraft, PolicyDraftValidation, TestScenario
+from gateway.contracts.agent import PolicyDraft, TestScenario
 from gateway.contracts.app import NonceValue, SignatureB58
 from gateway.contracts.policy import PolicyBody, body_from_draft, policy_hash
 from gateway.contracts.signing import activate_policy_message
@@ -30,12 +31,6 @@ from gateway.enums import AuditEvent, NoncePurpose, PolicyStatus, ProposalStatus
 router = APIRouter(prefix="/api/v1/policy", tags=["policy"])
 
 
-class DraftRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    conversation: list[ChatTurn] = Field(min_length=1, max_length=50)
-
-
 class DraftView(BaseModel):
     """A stored draft: the exact body (base units) and hash the guardian signs, by version."""
 
@@ -45,12 +40,6 @@ class DraftView(BaseModel):
     body_hash: str
     test_scenarios: list[TestScenario]
     open_questions: list[str]
-
-
-class DraftResponse(BaseModel):
-    draft: DraftView | None  # None when the agent's draft could not become a valid policy
-    agent_draft: PolicyDraft | None
-    validation: PolicyDraftValidation
 
 
 class ActivateRequest(BaseModel):
@@ -75,7 +64,7 @@ class ProposalView(BaseModel):
     created_at: datetime
 
 
-def _draft_view(row: Policy) -> DraftView:
+def draft_view(row: Policy) -> DraftView:
     return DraftView(
         id=str(row.id),
         version=row.version,
@@ -86,41 +75,26 @@ def _draft_view(row: Policy) -> DraftView:
     )
 
 
-@router.post("/drafts")
-async def create_draft(
-    body: DraftRequest, guardian: FamilyGuardianDep, request: Request, session: SessionDep
-) -> DraftResponse:
-    agent: AgentService = request.app.state.agent
-    family = guardian.family
-    result = await agent.draft_policy(
-        str(family.guardian_user_id), str(family.dependent_user_id), body.conversation
-    )
-    if result.draft is None or not result.validation.valid:
-        return DraftResponse(draft=None, agent_draft=result.draft, validation=result.validation)
-    try:
-        policy_body = body_from_draft(result.draft)
-    except ValueError as exc:
-        # The agent's own validation passed but ours did not: ours is what gets signed.
-        validation = PolicyDraftValidation(valid=False, errors=[str(exc)[:300]])
-        return DraftResponse(draft=None, agent_draft=result.draft, validation=validation)
-
+async def store_draft(session: AsyncSession, family_id: uuid.UUID, draft: PolicyDraft) -> Policy:
+    """The agent's draft (display units) as the next numbered draft in base units: the exact
+    body and hash the guardian will sign. Raises `ValueError` if it is not a valid policy.
+    The caller commits."""
+    policy_body = body_from_draft(draft)
     latest = await session.scalar(
-        select(func.max(Policy.version)).where(Policy.family_id == family.id)
+        select(func.max(Policy.version)).where(Policy.family_id == family_id)
     )
     row = Policy(
-        family_id=family.id,
+        family_id=family_id,
         version=(latest or 0) + 1,
         body=policy_body.model_dump(mode="json"),
         body_hash=policy_hash(policy_body),
-        test_scenarios=[s.model_dump() for s in result.draft.test_scenarios],
-        open_questions=list(result.draft.open_questions),
+        test_scenarios=[scenario.model_dump() for scenario in draft.test_scenarios],
+        open_questions=list(draft.open_questions),
         status=PolicyStatus.DRAFT,
     )
     session.add(row)
-    await session.commit()
-    return DraftResponse(
-        draft=_draft_view(row), agent_draft=result.draft, validation=result.validation
-    )
+    await session.flush()
+    return row
 
 
 async def _family_draft(session: SessionDep, family_id: uuid.UUID, draft_id: str) -> Policy:
@@ -137,7 +111,7 @@ async def _family_draft(session: SessionDep, family_id: uuid.UUID, draft_id: str
 
 @router.get("/drafts/{draft_id}")
 async def get_draft(draft_id: str, guardian: FamilyGuardianDep, session: SessionDep) -> DraftView:
-    return _draft_view(await _family_draft(session, guardian.family.id, draft_id))
+    return draft_view(await _family_draft(session, guardian.family.id, draft_id))
 
 
 @router.post("/drafts/{draft_id}/activate")

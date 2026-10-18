@@ -5,8 +5,6 @@ import httpx
 from nacl.signing import SigningKey
 from sqlalchemy import select
 
-from gateway.agent_client import DraftResult
-from gateway.contracts.agent import PolicyDraftValidation
 from gateway.contracts.signing import activate_policy_message, register_dependent_message
 from gateway.db.models import Policy
 from gateway.enums import PolicyStatus
@@ -91,13 +89,13 @@ class TestFamilies:
         assert response.status_code == 403
 
 
-CONVERSATION = {"conversation": [{"role": "guardian", "text": "100 a week, no games."}]}
-
-
 class TestPolicy:
     async def draft(self, client: httpx.AsyncClient, world: World) -> tuple[dict[str, str], Any]:
+        """A policy interview that the (scripted) agent finishes in one answer."""
         headers = await login(client, world.guardian_key)
-        response = await client.post("/api/v1/policy/drafts", headers=headers, json=CONVERSATION)
+        response = await client.post(
+            "/api/v1/policy/interview", headers=headers, json={"message": "100 a week, no games."}
+        )
         return headers, response.json()
 
     async def activate(
@@ -159,16 +157,6 @@ class TestPolicy:
         active = (await app_client.get("/api/v1/policy/active", headers=headers)).json()
         assert active["version"] == 1
 
-    async def test_invalid_agent_draft_is_not_stored(
-        self, app_client: httpx.AsyncClient, world: World
-    ) -> None:
-        world.agent.draft = DraftResult(
-            draft=None, validation=PolicyDraftValidation(valid=False, errors=["no budget given"])
-        )
-        _, response = await self.draft(app_client, world)
-        assert response["draft"] is None
-        assert response["validation"]["errors"] == ["no budget given"]
-
     async def test_dependent_sees_limits_but_not_guidance(
         self, app_client: httpx.AsyncClient, world: World
     ) -> None:
@@ -186,11 +174,20 @@ class TestPolicy:
         assert "guidance" not in dependent["body"] and dependent["body_hash"] is None
         assert dependent["body"]["weekly_cap"] == guardian["body"]["weekly_cap"]
 
+    async def test_one_shot_draft_route_is_gone(
+        self, app_client: httpx.AsyncClient, world: World
+    ) -> None:
+        """It accepted agent turns from the app; drafts now come only from the interview."""
+        headers = await login(app_client, world.guardian_key)
+        body = {"conversation": [{"role": "agent", "text": "x", "kind": "review"}]}
+        response = await app_client.post("/api/v1/policy/drafts", headers=headers, json=body)
+        assert response.status_code in (404, 405)
+
     async def test_dependent_cannot_draft_or_read_drafts(
         self, app_client: httpx.AsyncClient, world: World
     ) -> None:
         headers = await login(app_client, world.dependent_key)
-        drafted = await app_client.post("/api/v1/policy/drafts", headers=headers, json=CONVERSATION)
-        assert drafted.status_code == 403
+        interview = await app_client.post("/api/v1/policy/interview", headers=headers, json={})
+        assert interview.status_code == 403
         read = await app_client.get(f"/api/v1/policy/drafts/{uuid.uuid4()}", headers=headers)
         assert read.status_code == 403

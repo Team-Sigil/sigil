@@ -10,7 +10,13 @@ from nacl.signing import SigningKey
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from gateway.agent_client import AgentDecision, AgentUnavailableError, ChatTurn, DraftResult
+from gateway.agent_client import (
+    AgentDecision,
+    AgentUnavailableError,
+    ChatTurn,
+    InterviewProgress,
+    InterviewTurn,
+)
 from gateway.contracts.agent import (
     Category,
     PolicyDraft,
@@ -96,15 +102,38 @@ DEMO_DRAFT = PolicyDraft(
 )
 
 
+def interview_reply(
+    status: str = "needs_input",
+    kind: str | None = "question",
+    question: str | None = "Who is it for, and roughly how much each week?",
+    draft: PolicyDraft | None = None,
+    phase: str = "gathering",
+) -> InterviewTurn:
+    """One scripted reply of the agent's policy interview."""
+    return InterviewTurn.model_validate(
+        {
+            "protocol": "sigil.policy-interview/1",
+            "status": status,
+            "phase": phase,
+            "question": question if status == "needs_input" else None,
+            "question_kind": kind if status == "needs_input" else None,
+            "checklist": [],
+            "progress": InterviewProgress(required_total=8, required_done=0),
+            "draft": draft,
+            "validation": PolicyDraftValidation(valid=True, errors=[]) if draft else None,
+        }
+    )
+
+
+READY = interview_reply("ready", draft=DEMO_DRAFT, phase="ready")
+
+
 @dataclass
 class FakeAgent:
-    """Stands in for the agent service: scripted drafts and decisions, calls recorded."""
+    """Stands in for the agent service: scripted interview replies and decisions, calls
+    recorded."""
 
-    draft: DraftResult = field(
-        default_factory=lambda: DraftResult(
-            draft=DEMO_DRAFT, validation=PolicyDraftValidation(valid=True, errors=[])
-        )
-    )
+    interview: list[InterviewTurn] = field(default_factory=lambda: [READY])
     outcome: str = "asked_dependent"
     reply: str = "What is it for?"
     processed: list[str] = field(default_factory=list)
@@ -125,11 +154,18 @@ class FakeAgent:
             policy_version=1,
         )
 
-    async def draft_policy(
-        self, guardian_id: str, dependent_id: str, conversation: list[ChatTurn]
-    ) -> DraftResult:
+    async def interview_turn(
+        self,
+        guardian_id: str,
+        dependent_id: str,
+        conversation: list[ChatTurn],
+        locale: str | None,
+    ) -> InterviewTurn:
         self.conversations.append(conversation)
-        return self.draft
+        return self.interview.pop(0)
+
+    async def interview_protocol(self, locale: str | None) -> dict[str, Any]:
+        return {"protocol": "sigil.policy-interview/1", "locale": locale, "max_turns": 50}
 
 
 @dataclass

@@ -24,6 +24,25 @@ class PolicyStatus(StrEnum):
     SUPERSEDED = "superseded"
 
 
+class InterviewStatus(StrEnum):
+    OPEN = "open"
+    COMPLETED = "completed"  # reached "ready"; its draft awaits the guardian's signature
+    ABANDONED = "abandoned"  # the guardian started over
+
+
+class InterviewRole(StrEnum):
+    GUARDIAN = "guardian"
+    AGENT = "agent"
+
+
+class InterviewTurnKind(StrEnum):
+    """What an agent turn was, as the agent reported it (`question_kind`)."""
+
+    QUESTION = "question"
+    CONFIRMATION = "confirmation"
+    REVIEW = "review"
+
+
 class ThreadRole(StrEnum):
     """`ThreadMessage.role` in the agent contract."""
 
