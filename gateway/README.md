@@ -21,7 +21,7 @@ Sigil is four services that talk over HTTP:
 |---|---|---|
 | Sign-In With Solana, sessions, roles | `app_api/auth.py`, `app_api/sessions.py` | App API |
 | Families: register the dependent's wallet and token account, wallet-signed | `app_api/families.py` | App API |
-| Policy setup: send the guardian's chat to the agent, store the draft, activate it only with the guardian's signature | `app_api/policy.py` | App API, agent inbound API |
+| Policy setup: run the guardian's policy interview with the agent (storing the conversation), turn the agreed draft into a numbered draft, activate it only with the guardian's signature | `app_api/interview.py`, `app_api/policy.py` | App API, agent inbound API |
 | Requests, conversation and proofs; run the agent on each new message or proof | `app_api/requests.py` | App API, agent inbound API |
 | Verified in-app capture: attest the dependent's iPhone (App Attest), issue capture tickets, verify signed receipts | `capture/`, `app_api/capture.py` | App API |
 | Guardian decisions: signed answers to the agent's questions, the freeze switch | `app_api/guardian.py` | App API |
@@ -188,7 +188,10 @@ decimals: `12500000` = 12.50). Every route except `/auth/*` needs `Authorization
 | GET | `/me` | any session | `{user_id, wallet, role, family_id, display_name, locale}` |
 | POST | `/families` | guardian without a family | `{dependent_wallet, dependent_token_account, guardian_token_account, timezone?, dependent_name?, guardian_locale?, dependent_locale?, nonce, registration_signature_b58}` → `{family, token}` (use the new token) |
 | GET | `/family` | member | family |
-| POST | `/policy/drafts` | guardian | `{conversation: [{role: guardian\|agent, text}]}` → `{draft, agent_draft, validation}`; `draft` is `null` when invalid |
+| POST | `/policy/interview` | guardian | `{message?}` → `{status, phase, question, question_kind, checklist, progress, agent_draft, validation, draft, turns_used, max_turns}`; no message starts the interview |
+| GET | `/policy/interview` | guardian | the open (or latest) interview: `{interview_id, status, turns, draft_policy_id}` |
+| DELETE | `/policy/interview` | guardian | start over (the open interview is abandoned) |
+| GET | `/policy/interview/protocol?locale=` | guardian | the checklist and phases, with labels in the guardian's language |
 | GET | `/policy/drafts/{id}` | guardian | `{id, version, body, body_hash, test_scenarios, open_questions}` |
 | POST | `/policy/drafts/{id}/activate` | guardian | `{nonce, signature_b58}` → active policy |
 | GET | `/policy/active` | member | guardian: full body and hash; dependent: limits only, no guidance |
@@ -222,6 +225,23 @@ show it as "on its way", with no retry button.
 **Sign-in.** Get a nonce with `purpose: "login"`, have Phantom `signMessage` the returned
 `message` exactly, send it to `/auth/verify`. A nonce works once, for 5 minutes, for that
 wallet and purpose; a failed attempt burns it.
+
+**Policy interview.** The guardian sets up the policy by chatting with the agent (the agent
+layer's `policy-protocol.md`, `sigil.policy-interview/1`). Call `POST /policy/interview`
+with no message to get the opening question, then send each answer as `{message}`:
+
+| `status` | Show |
+|---|---|
+| `needs_input` | `question` (its `question_kind` is `question`, `confirmation` or `review`), and progress from `checklist` and `progress`; `agent_draft` is a live preview once every limit has a value |
+| `ready` | `draft`: the exact body (base units) and hash to sign with the `activate-policy` message below; the agent's scenarios are in `draft.test_scenarios` |
+| `unavailable` | "Try again": nothing was stored, so send the same message again later |
+
+The gateway stores the conversation, sends all of it to the agent every turn, and stores each
+agent turn exactly as returned, with its kind. The app only ever sends the guardian's own
+message; there is no way to submit an agent turn, so the `review` turn that "ready" depends
+on can't be faked. To change something, the guardian says so in the chat. An interview holds
+at most 50 turns (`409 INTERVIEW_TOO_LONG`: offer to start over); dependents see nothing of
+it.
 
 **Guardian signatures.** Get a nonce with the matching `purpose`, build the text below
 exactly (UTF-8, `\n` line breaks, no trailing newline), sign it with Phantom
@@ -302,7 +322,8 @@ refetch through the endpoints above. Send the token in the `Authorization` heade
 streaming); never put it in the URL. Dependents do not receive `question` events.
 
 **Errors.** `{"error": {"code": "UPPER_SNAKE", "message": "…"}}`: `UNAUTHORIZED` 401,
-`FORBIDDEN` 403, `NOT_FOUND` 404, `CONFLICT` 409, `VALIDATION_ERROR` / `INVALID_ANSWER` /
+`FORBIDDEN` 403, `NOT_FOUND` 404, `CONFLICT` / `INTERVIEW_TOO_LONG` 409, `VALIDATION_ERROR` /
+`INVALID_ANSWER` / `INTERVIEW_MESSAGE_REQUIRED` /
 `UNSUPPORTED_PROOF` / `ATTESTATION_FAILED` 422, `PAYLOAD_TOO_LARGE` 413, `RATE_LIMITED` /
 `DAILY_LIMIT_REACHED` 429, `AGENT_UNAVAILABLE`
 502, `INTERNAL_ERROR` 500. Validation errors name fields but never echo input.
@@ -404,7 +425,7 @@ named as in the agent contract (`amount`, `amount_requested`, `already_sent`).
 | Requests | `requests`, `messages`, `proofs` (normalised copy, encrypted original, perceptual hash), `used_proof_keys`, `receipt_fingerprints` (keyed, shared by all families), `proof_requests` |
 | Capture | `capture_devices` (attested phone keys, App Attest counters), `capture_tickets` |
 | Money | `transfers` (one per idempotency key; its id is the agent's `decision_id`), `auditor_verdicts`, `budget_counters` |
-| Guardian and agent | `guardian_questions`, `policy_proposals`, `notifications`, `decisions`, `agent_events`, `llm_usage` |
+| Guardian and agent | `policy_interviews`, `policy_interview_turns` (encrypted, append-only, `kind` on agent turns), `guardian_questions`, `policy_proposals`, `notifications`, `decisions`, `agent_events`, `llm_usage` |
 | Trail | `audit_log` |
 
 - **Encryption at rest**: request messages, thread text, proof files, notifications and the
@@ -429,7 +450,8 @@ src/gateway/
   capture/          apple.py (App Attest), service.py (enrolment, tickets, verification),
                     der.py, roots/ (Apple's root)
   agent_api/        platform API for the agent layer: auth, routes, service
-  app_api/          app API: auth, sessions, nonces, families, policy, requests, guardian, reads
+  app_api/          app API: auth, sessions, nonces, families, interview, policy, requests,
+                    guardian, capture, reads
   agent_client.py   calls the agent layer's inbound API
   crypto_client.py  HMAC client for the crypto layer
   events.py         in-process event bus for SSE
@@ -567,6 +589,7 @@ Status of the agent layer's `gateway-handoff.md` (reviewed at `6810508`):
 | 8 | Daily request quota per dependent | Done: `DEPENDENT_MESSAGES_PER_DAY`, `429 DAILY_LIMIT_REACHED` |
 | 9 | Auditor read access to context | Done: the Auditor's token may read context |
 | 10 | Link decisions to transfers | Done gateway-side: `decisions.transfer_id`, no contract change |
+| 11 | Policy interview | Done: `/api/v1/policy/interview` stores the conversation and kinds, the app can't submit agent turns, `ready` feeds the signing flow. The one-shot `POST /api/v1/policy/drafts` is removed |
 
 ## Questions for the other layers
 
