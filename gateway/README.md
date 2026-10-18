@@ -81,7 +81,7 @@ sequenceDiagram
     AG->>PL: POST /agent/v1/transfers (Idempotency-Key, no recipient)
     PL->>EN: submit(instruction)
     EN->>CR: GET /v1/delegation/{guardian token account}
-    Note over EN: lock the budget week, load and verify every fact,<br/>run the checks; blocked: store and return the reason
+    Note over EN: lock the budget week, load and verify every fact,<br/>run the checks.<br/>Blocked: store and return the reason
     EN->>EN: reserve, spend verdict and proofs, pending row, commit
     EN->>CR: POST /v1/transfer (HMAC)
     CR-->>EN: confirmed + tx_signature
