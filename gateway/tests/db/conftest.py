@@ -140,7 +140,12 @@ async def world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
 async def app_client(world: World) -> AsyncIterator[httpx.AsyncClient]:
     """The whole gateway app on the test database, with the world's fake crypto layer."""
     settings = Settings(agent_wallet_pubkey=AGENT_WALLET, ausd_mint=MINT)
-    app = create_app(settings=settings, sessionmaker=world.sessionmaker, crypto=world.crypto)
+    app = create_app(
+        settings=settings,
+        sessionmaker=world.sessionmaker,
+        crypto=world.crypto,
+        agent=world.agent,
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://gateway"
     ) as client:

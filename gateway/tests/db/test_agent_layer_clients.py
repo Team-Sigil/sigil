@@ -69,7 +69,10 @@ def gateway_url(world: World) -> Iterator[str]:
     settings = Settings(agent_wallet_pubkey=AGENT_WALLET, ausd_mint=MINT)
     # Its own connection pool: the server runs on its own event loop in another thread.
     app = create_app(
-        settings=settings, sessionmaker=make_sessionmaker(APP_URL), crypto=world.crypto
+        settings=settings,
+        sessionmaker=make_sessionmaker(APP_URL),
+        crypto=world.crypto,
+        agent=world.agent,
     )
     server = BackgroundServer(app)
     url = server.start()

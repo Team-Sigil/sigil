@@ -5,8 +5,10 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from gateway.agent_api.routes import router as agent_router
+from gateway.agent_client import AgentService, HttpAgentClient
 from gateway.app_api.auth import router as auth_router
 from gateway.app_api.families import router as families_router
+from gateway.app_api.policy import router as policy_router
 from gateway.contracts.crypto import CryptoClient
 from gateway.core.config import Settings, get_settings
 from gateway.core.errors import install_error_handlers
@@ -21,27 +23,36 @@ def create_app(
     settings: Settings | None = None,
     sessionmaker: async_sessionmaker[AsyncSession] | None = None,
     crypto: CryptoClient | None = None,
+    agent: AgentService | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.secret_values())
     sessionmaker = sessionmaker or make_sessionmaker(settings.database_url)
-    owned_client = None
+    owned_crypto = owned_agent = None
     if crypto is None:
-        owned_client = HttpCryptoClient(
+        owned_crypto = HttpCryptoClient(
             settings.crypto_url, settings.crypto_hmac_secret.get_secret_value()
         )
-        crypto = owned_client
+        crypto = owned_crypto
+    if agent is None:
+        owned_agent = HttpAgentClient(
+            settings.agent_url, settings.agent_inbound_token.get_secret_value()
+        )
+        agent = owned_agent
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
-        if owned_client is not None:
-            await owned_client.aclose()
+        if owned_crypto is not None:
+            await owned_crypto.aclose()
+        if owned_agent is not None:
+            await owned_agent.aclose()
 
     app = FastAPI(title="Sigil gateway", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.sessionmaker = sessionmaker
     app.state.crypto = crypto
+    app.state.agent = agent
     app.state.engine = TransferEngine(
         sessionmaker,
         crypto,
@@ -52,6 +63,7 @@ def create_app(
     app.include_router(agent_router)
     app.include_router(auth_router)
     app.include_router(families_router)
+    app.include_router(policy_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:

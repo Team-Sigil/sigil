@@ -10,7 +10,14 @@ from nacl.signing import SigningKey
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from gateway.contracts.agent import TransferInstruction
+from gateway.agent_client import AgentDecision, AgentUnavailableError, ChatTurn, DraftResult
+from gateway.contracts.agent import (
+    Category,
+    PolicyDraft,
+    PolicyDraftValidation,
+    TestScenario,
+    TransferInstruction,
+)
 from gateway.contracts.crypto import (
     CryptoTransferRequest,
     CryptoTransferResponse,
@@ -77,10 +84,59 @@ class FakeCrypto:
         return CryptoTransferResponse(status=CryptoTransferStatus.CONFIRMED, tx_signature=signature)
 
 
+DEMO_DRAFT = PolicyDraft(
+    weekly_cap=100,
+    max_per_request=40,
+    blocked_categories=[Category.GAMING],
+    proof_threshold=25,
+    allowance_amount=30,
+    allowance_weekday=0,
+    guidance="School supplies and bus fare are always fine. Ask me about trips.",
+    test_scenarios=[TestScenario(scenario="12.00 for a novel", what_i_would_do="Send it.")],
+)
+
+
+@dataclass
+class FakeAgent:
+    """Stands in for the agent service: scripted drafts and decisions, calls recorded."""
+
+    draft: DraftResult = field(
+        default_factory=lambda: DraftResult(
+            draft=DEMO_DRAFT, validation=PolicyDraftValidation(valid=True, errors=[])
+        )
+    )
+    outcome: str = "asked_dependent"
+    reply: str = "What is it for?"
+    processed: list[str] = field(default_factory=list)
+    conversations: list[list[ChatTurn]] = field(default_factory=list)
+    fail: bool = False
+
+    async def process_request(self, request_id: str) -> AgentDecision:
+        if self.fail:
+            raise AgentUnavailableError()
+        self.processed.append(request_id)
+        return AgentDecision(
+            dependent_id="d",
+            request_id=request_id,
+            outcome=self.outcome,
+            reply_to_dependent=self.reply,
+            summary_for_guardian="Asked what it is for.",
+            amount_sent=0,
+            policy_version=1,
+        )
+
+    async def draft_policy(
+        self, guardian_id: str, dependent_id: str, conversation: list[ChatTurn]
+    ) -> DraftResult:
+        self.conversations.append(conversation)
+        return self.draft
+
+
 @dataclass
 class World:
     sessionmaker: async_sessionmaker[AsyncSession]
     crypto: FakeCrypto
+    agent: FakeAgent
     engine: TransferEngine
     guardian_key: SigningKey
     dependent_key: SigningKey
@@ -191,4 +247,4 @@ async def build_world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
     engine = TransferEngine(
         sessionmaker, crypto, agent_wallet=AGENT_WALLET, mint=MINT, clock=lambda: NOW
     )
-    return World(sessionmaker, crypto, engine, guardian_key, dependent_key, family)
+    return World(sessionmaker, crypto, FakeAgent(), engine, guardian_key, dependent_key, family)

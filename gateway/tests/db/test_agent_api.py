@@ -1,29 +1,22 @@
 import base64
-from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 import pytest
 
 from gateway.contracts import agent
-from gateway.core.config import Settings
 from gateway.db.models import Message
 from gateway.enums import ThreadRole
-from gateway.main import create_app
 from tests.conftest import TEST_ENV
-from tests.db.world import AGENT_WALLET, AUSD, MINT, World
+from tests.db.world import AUSD, World
 
 MAKER = {"Authorization": f"Bearer {TEST_ENV['PLATFORM_MAKER_TOKEN']}"}
 AUDITOR = {"Authorization": f"Bearer {TEST_ENV['PLATFORM_AUDITOR_TOKEN']}"}
 
 
 @pytest.fixture
-async def client(world: World) -> AsyncIterator[httpx.AsyncClient]:
-    settings = Settings(agent_wallet_pubkey=AGENT_WALLET, ausd_mint=MINT)
-    app = create_app(settings=settings, sessionmaker=world.sessionmaker, crypto=world.crypto)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://gateway") as c:
-        yield c
+def client(app_client: httpx.AsyncClient) -> httpx.AsyncClient:
+    return app_client
 
 
 def transfer_body(world: World, request_id: str, **overrides: Any) -> dict[str, Any]:
