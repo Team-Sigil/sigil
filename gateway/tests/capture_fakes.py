@@ -1,5 +1,5 @@
-"""Synthetic attestations for tests: our own CAs standing in for Apple's and Google's, with
-devices that produce App Attest attestations and assertions or Android key-attestation chains.
+"""Synthetic App Attest for tests: our own CA standing in for Apple's, and an iPhone that
+produces attestations and assertions.
 """
 
 import hashlib
@@ -14,8 +14,6 @@ from cryptography.x509.oid import NameOID
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
 APP_ID = "TEAMID1234.com.sigil.app"
-PACKAGE = "com.sigil.app"
-SIGNING_DIGEST = hashlib.sha256(b"sigil release signing certificate").digest()
 
 
 # --- DER encoding (just enough to build the extensions) ---------------------------------------
@@ -49,25 +47,13 @@ def seq(*items: bytes) -> bytes:
     return tlv(b"\x30", b"".join(items))
 
 
-def set_of(*items: bytes) -> bytes:
-    return tlv(b"\x31", b"".join(items))
-
-
 def integer(value: int) -> bytes:
     raw = value.to_bytes(max(1, (value.bit_length() + 8) // 8), "big", signed=True)
     return tlv(b"\x02", raw)
 
 
-def enumerated(value: int) -> bytes:
-    return tlv(b"\x0a", bytes([value]))
-
-
 def octets(value: bytes) -> bytes:
     return tlv(b"\x04", value)
-
-
-def boolean(value: bool) -> bytes:
-    return tlv(b"\x01", b"\xff" if value else b"\x00")
 
 
 def explicit(number: int, content: bytes) -> bytes:
@@ -189,58 +175,3 @@ class AppleDevice:
         nonce = hashlib.sha256(auth_data + hashlib.sha256(client_data).digest()).digest()
         signature = self.key.sign(nonce, ec.ECDSA(hashes.SHA256()))
         return cbor2.dumps({"signature": signature, "authenticatorData": auth_data})
-
-
-# --- Android key attestation ------------------------------------------------------------------
-
-
-@dataclass
-class AndroidDevice:
-    """A phone with a hardware-backed key, attested by `root` (our stand-in for Google)."""
-
-    root: Ca = field(default_factory=lambda: make_ca("Test Key Attestation Root"))
-    key: ec.EllipticCurvePrivateKey = field(
-        default_factory=lambda: ec.generate_private_key(ec.SECP256R1())
-    )
-
-    def chain(
-        self,
-        challenge: bytes,
-        *,
-        security_level: int = 1,  # TrustedEnvironment
-        package: str = PACKAGE,
-        signing_digest: bytes = SIGNING_DIGEST,
-        device_locked: bool = True,
-        boot_state: int = 0,  # Verified
-        root_of_trust: bool = True,
-    ) -> list[bytes]:
-        intermediate = make_ca("Test Attestation Intermediate", self.root)
-        application_id = seq(
-            set_of(seq(octets(package.encode()), integer(1))),
-            set_of(octets(signing_digest)),
-        )
-        software = seq(explicit(709, octets(application_id)))
-        hardware_items = [explicit(2, integer(3))]  # algorithm: EC
-        if root_of_trust:
-            hardware_items.append(
-                explicit(
-                    704, seq(octets(b"\x00" * 32), boolean(device_locked), enumerated(boot_state))
-                )
-            )
-        description = seq(
-            integer(200),
-            enumerated(security_level),
-            integer(200),
-            enumerated(security_level),
-            octets(challenge),
-            octets(b""),
-            software,
-            seq(*hardware_items),
-        )
-        leaf = make_leaf(
-            intermediate, self.key.public_key(), "1.3.6.1.4.1.11129.2.1.17", description
-        )
-        return [der(leaf), der(intermediate.cert), der(self.root.cert)]
-
-    def sign(self, data: bytes) -> bytes:
-        return self.key.sign(data, ec.ECDSA(hashes.SHA256()))

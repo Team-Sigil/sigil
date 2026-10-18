@@ -23,7 +23,7 @@ Sigil is four services that talk over HTTP:
 | Families: register the dependent's wallet and token account, wallet-signed | `app_api/families.py` | App API |
 | Policy setup: send the guardian's chat to the agent, store the draft, activate it only with the guardian's signature | `app_api/policy.py` | App API, agent inbound API |
 | Requests, conversation and proofs; run the agent on each new message or proof | `app_api/requests.py` | App API, agent inbound API |
-| Verified in-app capture: attest the dependent's phone, issue capture tickets, verify signed receipts | `capture/`, `app_api/capture.py` | App API |
+| Verified in-app capture: attest the dependent's iPhone (App Attest), issue capture tickets, verify signed receipts | `capture/`, `app_api/capture.py` | App API |
 | Guardian decisions: signed answers to the agent's questions, the freeze switch | `app_api/guardian.py` | App API |
 | Budget, history, notifications, audit trail, live events | `app_api/reads.py`, `events.py` | App API |
 | Everything the agent reads and every action it requests | `agent_api/` | Platform API (`/agent/v1/*`) |
@@ -165,7 +165,7 @@ it needs the guardian.
 | SEC-20 | Missing or unverifiable data blocks (default deny) | `engine/checks.py` | per-check tests |
 | — | Reservoir ownership: only spend from a token account owned by the guardian | `engine/transfers.py` | another family's reservoir |
 | — | One receipt backs one transfer (id, hash and receipt fingerprint), across requests | `engine/proofs.py`, `used_proof_keys` | proof reuse tests |
-| — | A receipt is `photo` only if taken in our genuine app on an attested phone, unedited, for this request, within its ticket | `capture/` | `test_app_capture.py`, `test_capture_apple.py`, `test_capture_android.py` |
+| — | A receipt is `photo` only if taken in our genuine iOS app on an App Attest-verified iPhone, unedited, for this request, within its ticket | `capture/` | `test_app_capture.py`, `test_capture_apple.py` |
 
 Attack demos covered as tests: talking the agent into a large transfer (caps and override
 rules), replayed request, revoked delegation, skipped audit, forged guardian approval,
@@ -193,8 +193,8 @@ decimals: `12500000` = 12.50). Every route except `/auth/*` needs `Authorization
 | POST | `/requests/{id}/messages` | dependent | `{message, amount_requested?}` → `{request, decision}` |
 | POST | `/requests/{id}/proofs` | dependent | multipart `file`, `kind` (`receipt\|quote\|photo`), and for an in-app capture `capture_claim` + `capture_signature` → `{proof, decision}` |
 | POST | `/capture/challenge` | dependent | → `{challenge, expires_at}` for enrolling a phone |
-| POST | `/capture/devices` | dependent | iOS: `{platform: "ios", challenge, key_id, attestation_object}`; Android: `{platform: "android", challenge, certificate_chain, integrity_token}` → device |
-| GET | `/capture/devices`; DELETE `/capture/devices/{id}` | member | list; revoke (dependents their own phone, guardians any family device) |
+| POST | `/capture/devices` | dependent | `{challenge, key_id, attestation_object}` (App Attest, base64) → device |
+| GET | `/capture/devices`; DELETE `/capture/devices/{id}` | member | list; revoke (dependents their own iPhone, guardians any family device) |
 | POST | `/requests/{id}/capture-tickets` | dependent | `{device_id}` → `{ticket, request_id, device_id, expires_at}` |
 | POST | `/requests/{id}/process` | member | → `{request, decision}`; retry after `AGENT_UNAVAILABLE` |
 | GET | `/requests`, `/requests/{id}` | member | list; detail with thread, proofs and decisions (guardian summaries for guardians only) |
@@ -253,21 +253,18 @@ text (stored as the dependent's claim, never as evidence). At most 5 MB and 3 pe
 Re-uploading an image the family already used is flagged `duplicate`. A plain upload is
 `source: "file"`; only a verified in-app capture (below) is `"photo"`.
 
-**Verified in-app capture.** Follows the agent layer's design (`proof-images.md`, "Verified
-in-app capture"). Receipts are taken with the app's own camera, with no gallery picker.
+**Verified in-app capture (iOS).** Follows the agent layer's design (`proof-images.md`,
+"Verified in-app capture") with Apple App Attest. Receipts are taken with the app's own
+camera, with no gallery picker.
 
-1. *Once per phone.* `POST /capture/challenge`, then attest a hardware key and send it to
-   `POST /capture/devices`:
-   - **iOS:** generate an App Attest key (`DCAppAttestService`), attest it with
-     `clientDataHash = SHA-256(UTF-8 challenge)`, send the base64 `key_id` and
-     `attestation_object`.
-   - **Android:** generate an EC P-256 key in the Keystore (StrongBox if available) with
-     the UTF-8 challenge as its attestation challenge; send the attestation chain (leaf
-     first, base64 DER) and a classic Play Integrity token requested with
-     `nonce = challenge`.
-
-   A phone that fails attestation (rooted, emulator, modified app, not from Play) gets
-   `422 ATTESTATION_FAILED` and its receipts upload as plain files.
+1. *Once per iPhone.* `POST /capture/challenge`, then generate an App Attest key
+   (`DCAppAttestService.generateKey`), attest it with
+   `clientDataHash = SHA-256(UTF-8 challenge)` (`attestKey`), and send the base64 `key_id`
+   and `attestation_object` to `POST /capture/devices`. The gateway checks the chain to
+   Apple's App Attestation root, the nonce, the key id, our app id (`APPLE_APP_ID`), the
+   App Attest environment and the counter. A device that fails (simulator, modified app,
+   development key in production) gets `422 ATTESTATION_FAILED`, and its receipts upload
+   as plain files.
 2. *Each receipt.* `POST /requests/{id}/capture-tickets` with the device id. Take the photo,
    then sign this claim with the device key and upload it with the image, untouched:
 
@@ -277,9 +274,9 @@ in-app capture"). Receipts are taken with the app's own camera, with no gallery 
     "device_key_id": "<device key_id>", "app_version": "1.4.0"}
    ```
 
-   `capture_claim` is the claim's JSON text, and the signature covers exactly those UTF-8
-   bytes. `capture_signature` is base64 of an App Attest assertion (iOS, `clientData` = the
-   claim bytes) or a DER ECDSA-SHA256 signature over the claim bytes (Android).
+   `capture_claim` is the claim's JSON text. `capture_signature` is base64 of the App Attest
+   assertion (`generateAssertion`) with `clientDataHash` = SHA-256 of exactly those claim
+   bytes.
 
 The gateway checks, in order: the key is enrolled and unrevoked for this dependent; the
 signature is valid (and the App Attest counter has increased); the ticket is unused,
@@ -401,8 +398,8 @@ src/gateway/
   core/             settings, logging (redacts secrets), error envelope, crypto helpers
   contracts/        agent.py (verbatim agent contract), policy.py, crypto.py, signing.py, app.py
   engine/           checks.py (pure decision), triggers.py, proofs.py, transfers.py (the transaction)
-  capture/          apple.py (App Attest), android.py (key attestation), play_integrity.py,
-                    service.py (enrolment, tickets, verification), der.py, chains.py, roots/
+  capture/          apple.py (App Attest), service.py (enrolment, tickets, verification),
+                    der.py, roots/ (Apple's root)
   agent_api/        platform API for the agent layer: auth, routes, service
   app_api/          app API: auth, sessions, nonces, families, policy, requests, guardian, reads
   agent_client.py   calls the agent layer's inbound API
@@ -493,8 +490,6 @@ agent-layer parity and end-to-end tests skip when `../agent-layer` is not checke
 | `CRYPTO_URL`, `CRYPTO_HMAC_SECRET` | Calling the crypto layer |
 | `AUSD_MINT`, `AGENT_WALLET_PUBKEY` | The token mint and the agent wallet (the delegate) |
 | `APPLE_APP_ID`, `APPLE_APP_ATTEST_PRODUCTION` | iOS app identity (`<Team ID>.<bundle id>`) and App Attest environment; iOS capture is off until set |
-| `ANDROID_PACKAGE`, `ANDROID_SIGNING_CERT_SHA256` | Android package and release signing certificate digests (hex, comma-separated); Android capture is off until set |
-| `PLAY_INTEGRITY_SERVICE_ACCOUNT_FILE` | Google service account JSON for decoding Play Integrity tokens; Android enrolment is refused without it |
 | `CAMERA_ONLY_PROOFS` | Only verified captures count as proof; must match the agent layer's `AGENT_CAMERA_ONLY_PROOFS` |
 | `RATE_LIMIT_PER_MIN`, `LLM_TOKEN_BUDGET_PER_FAMILY_PER_DAY` | Limits |
 | `GATEWAY_AGENT_URL`, `GATEWAY_CRYPTO_URL` | docker-compose only: where the gateway container finds the agent and crypto layers |
@@ -510,9 +505,8 @@ Dependencies beyond SPEC §3: `pydantic-settings`, `psycopg` 3, `PyJWT`, `crypto
    not decoded, re-encoded, resized or stripped of EXIF/GPS metadata as the agent layer
    proposes (`proof-images.md`). No perceptual hashing, so only exact duplicates are
    flagged.
-3. **Verified capture limits.** Claims are signed JSON, not C2PA manifests. Android
-   attestation certificates are not yet checked against Google's revocation list, and App
-   Attest receipts are not used for fraud metrics. The original signed image is what the
+3. **Verified capture limits.** Claims are signed JSON, not C2PA manifests, and App Attest
+   receipts are not used for Apple's fraud metric. The original signed image is what the
    agent sees (no normalised copy, see gap 2). Photographing a fake or someone else's
    receipt is still possible, as the agent layer's doc explains.
 4. **Agent calls are synchronous.** Request, message, proof and answer calls wait for the
@@ -535,5 +529,5 @@ Dependencies beyond SPEC §3: `pydantic-settings`, `psycopg` 3, `PyJWT`, `crypto
   `guardian_answer` thread messages use a specific wording?
 - **Shine:** SSE needs header-based auth (the token in the `Authorization` header, never the
   URL); agent-backed calls need ≥ 3-minute timeouts; signed texts must match the templates
-  byte for byte. For receipts: the App Attest / Keystore + Play Integrity enrolment and the
-  signed capture claim above, with no gallery picker.
+  byte for byte. For receipts: the App Attest enrolment and the signed capture claim above,
+  with no gallery picker.

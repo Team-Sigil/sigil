@@ -14,7 +14,6 @@ from gateway.app_api.policy import router as policy_router
 from gateway.app_api.reads import router as reads_router
 from gateway.app_api.requests import router as requests_router
 from gateway.capture.config import CaptureConfig, capture_config
-from gateway.capture.play_integrity import GooglePlayIntegrity
 from gateway.contracts.crypto import CryptoClient
 from gateway.core.config import Settings, get_settings
 from gateway.core.errors import install_error_handlers
@@ -57,8 +56,6 @@ def create_app(
             await owned_crypto.aclose()
         if owned_agent is not None:
             await owned_agent.aclose()
-        if isinstance(capture.integrity, GooglePlayIntegrity):
-            await capture.integrity.aclose()
 
     app = FastAPI(title="Sigil gateway", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings

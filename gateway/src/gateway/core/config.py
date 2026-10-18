@@ -37,13 +37,9 @@ class Settings(BaseSettings):
     ausd_mint: str
     agent_wallet_pubkey: str
 
-    # Verified in-app capture. A platform stays off (its devices cannot enrol) until its app
-    # identity is set; Android also needs Play Integrity.
+    # Verified in-app capture (iOS App Attest). Off (no device can enrol) until the app id is set.
     apple_app_id: str | None = None  # "<Team ID>.<bundle id>"
     apple_app_attest_production: bool = True
-    android_package: str | None = None
-    android_signing_cert_sha256: str = ""  # comma-separated hex digests of release certificates
-    play_integrity_service_account_file: str | None = None
     # Only verified captures count as proof; must match the agent's AGENT_CAMERA_ONLY_PROOFS.
     camera_only_proofs: bool = False
 

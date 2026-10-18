@@ -1,11 +1,11 @@
-"""A minimal DER reader for the two ASN.1 structures attestation needs: Apple's App Attest
-nonce extension and Android's KeyDescription. Strict: anything malformed raises `DerError`.
+"""A minimal DER reader for the ASN.1 that App Attest needs (the credential certificate's
+nonce extension). Strict: anything malformed raises `DerError`.
 """
 
 from dataclasses import dataclass
 
 UNIVERSAL, APPLICATION, CONTEXT, PRIVATE = 0, 1, 2, 3
-INTEGER, OCTET_STRING, ENUMERATED, BOOLEAN, SEQUENCE, SET = 2, 4, 10, 1, 16, 17
+INTEGER, OCTET_STRING, SEQUENCE = 2, 4, 16
 
 
 class DerError(ValueError):
@@ -34,11 +34,6 @@ class Tlv:
             raise DerError("bad integer")
         return int.from_bytes(self.value, "big", signed=True)
 
-    def as_bool(self) -> bool:
-        if self.constructed or len(self.value) != 1:
-            raise DerError("bad boolean")
-        return self.value != b"\x00"
-
 
 def read_one(data: bytes, offset: int = 0) -> tuple[Tlv, int]:
     """Reads one TLV at `offset`; returns it and the offset after it."""
@@ -46,7 +41,7 @@ def read_one(data: bytes, offset: int = 0) -> tuple[Tlv, int]:
         first = data[offset]
         offset += 1
         cls, constructed, number = first >> 6, bool(first & 0x20), first & 0x1F
-        if number == 0x1F:  # high tag number form (Android uses tags like 704 and 709)
+        if number == 0x1F:  # high tag number form
             number = 0
             while True:
                 byte = data[offset]

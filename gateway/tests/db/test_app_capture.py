@@ -2,7 +2,6 @@ import base64
 import hashlib
 import json
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -11,13 +10,12 @@ import pytest
 from sqlalchemy import update
 
 from gateway.capture.config import CaptureConfig
-from gateway.capture.errors import AttestationError
 from gateway.contracts.agent import ProofFindingsRecord
 from gateway.core.config import Settings
 from gateway.db.models import CaptureTicket, Request
 from gateway.engine.transfers import TransferEngine
 from gateway.main import create_app
-from tests.capture_fakes import APP_ID, PACKAGE, SIGNING_DIGEST, AndroidDevice, AppleDevice
+from tests.capture_fakes import APP_ID, AppleDevice
 from tests.db.test_app_auth import login
 from tests.db.test_app_requests import JPEG, new_request
 from tests.db.world import AGENT_WALLET, AUSD, MINT, World
@@ -27,35 +25,17 @@ def b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode()
 
 
-class FakeIntegrity:
-    """Stands in for Google: a token is good when it names the nonce it was requested for."""
-
-    async def verify(self, token: str, nonce: str, now_ms: int) -> None:
-        if token != f"good:{nonce}":
-            raise AttestationError("bad integrity token")
-
-
-@dataclass
-class Phones:
-    iphone: AppleDevice
-    android: AndroidDevice
+@pytest.fixture
+def iphone() -> AppleDevice:
+    return AppleDevice()
 
 
 @pytest.fixture
-def phones() -> Phones:
-    return Phones(AppleDevice(), AndroidDevice())
-
-
-@pytest.fixture
-async def client(world: World, phones: Phones) -> AsyncIterator[httpx.AsyncClient]:
+async def client(world: World, iphone: AppleDevice) -> AsyncIterator[httpx.AsyncClient]:
     capture = CaptureConfig(
         apple_app_id=APP_ID,
         apple_production=True,
-        android_package=PACKAGE,
-        android_signing_digests={SIGNING_DIGEST},
-        integrity=FakeIntegrity(),
-        apple_roots=[phones.iphone.root.cert],  # stand-ins for Apple's and Google's roots
-        google_roots=[phones.android.root.cert],
+        apple_roots=[iphone.root.cert],  # stand-in for Apple's root
     )
     app = create_app(
         settings=Settings(agent_wallet_pubkey=AGENT_WALLET, ausd_mint=MINT),
@@ -81,26 +61,9 @@ async def enrol_iphone(
 ) -> httpx.Response:
     c = await challenge(client, headers)
     body = {
-        "platform": "ios",
         "challenge": c,
         "key_id": b64(phone.key_id),
         "attestation_object": b64(phone.attest(attest.pop("challenge", c).encode(), **attest)),
-    }
-    return await client.post("/api/v1/capture/devices", headers=headers, json=body)
-
-
-async def enrol_android(
-    client: httpx.AsyncClient,
-    headers: dict[str, str],
-    phone: AndroidDevice,
-    token: str | None = None,
-) -> httpx.Response:
-    c = await challenge(client, headers)
-    body = {
-        "platform": "android",
-        "challenge": c,
-        "certificate_chain": [b64(cert) for cert in phone.chain(c.encode())],
-        "integrity_token": token or f"good:{c}",
     }
     return await client.post("/api/v1/capture/devices", headers=headers, json=body)
 
@@ -157,52 +120,31 @@ async def upload(
 
 class TestEnrolment:
     async def test_iphone_enrols(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
         headers = await login(client, world.dependent_key)
-        response = await enrol_iphone(client, headers, phones.iphone)
+        response = await enrol_iphone(client, headers, iphone)
         assert response.status_code == 200, response.text
-        assert (response.json()["platform"], response.json()["security_level"]) == (
-            "ios",
-            "secure_enclave",
-        )
         listed = (await client.get("/api/v1/capture/devices", headers=headers)).json()
-        assert [d["key_id"] for d in listed] == [b64(phones.iphone.key_id)]
-
-    async def test_android_enrols_with_integrity(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
-    ) -> None:
-        headers = await login(client, world.dependent_key)
-        response = await enrol_android(client, headers, phones.android)
-        assert response.status_code == 200, response.text
-        assert response.json()["security_level"] == "trusted_environment"
-
-    async def test_android_without_play_integrity_is_refused(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
-    ) -> None:
-        headers = await login(client, world.dependent_key)
-        response = await enrol_android(client, headers, phones.android, token="tampered")
-        assert response.status_code == 422
-        assert response.json()["error"]["code"] == "ATTESTATION_FAILED"
+        assert [d["key_id"] for d in listed] == [b64(iphone.key_id)]
 
     async def test_attestation_for_an_old_challenge_is_refused(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
         headers = await login(client, world.dependent_key)
-        response = await enrol_iphone(client, headers, phones.iphone, challenge="stale-challenge")
+        response = await enrol_iphone(client, headers, iphone, challenge="stale-challenge")
         assert response.status_code == 422
         assert (await client.get("/api/v1/capture/devices", headers=headers)).json() == []
 
     async def test_challenge_works_once(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
         headers = await login(client, world.dependent_key)
         c = await challenge(client, headers)
         body = {
-            "platform": "ios",
             "challenge": c,
-            "key_id": b64(phones.iphone.key_id),
-            "attestation_object": b64(phones.iphone.attest(c.encode())),
+            "key_id": b64(iphone.key_id),
+            "attestation_object": b64(iphone.attest(c.encode())),
         }
         assert (
             await client.post("/api/v1/capture/devices", headers=headers, json=body)
@@ -211,18 +153,20 @@ class TestEnrolment:
             await client.post("/api/v1/capture/devices", headers=headers, json=body)
         ).status_code == 401
 
-    async def test_unconfigured_platform_is_refused(self, world: World, phones: Phones) -> None:
+    async def test_unconfigured_app_attest_is_refused(
+        self, world: World, iphone: AppleDevice
+    ) -> None:
         app = create_app(
             settings=Settings(agent_wallet_pubkey=AGENT_WALLET, ausd_mint=MINT),
             sessionmaker=world.sessionmaker,
             crypto=world.crypto,
             agent=world.agent,
-            capture=CaptureConfig(None, True, None, set(), apple_roots=[phones.iphone.root.cert]),
+            capture=CaptureConfig(None, True, apple_roots=[iphone.root.cert]),
         )
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://gateway") as c:
             headers = await login(c, world.dependent_key)
-            assert (await enrol_iphone(c, headers, phones.iphone)).status_code == 422
+            assert (await enrol_iphone(c, headers, iphone)).status_code == 422
 
     async def test_guardian_cannot_enrol(self, client: httpx.AsyncClient, world: World) -> None:
         headers = await login(client, world.guardian_key)
@@ -239,44 +183,44 @@ class TestIphoneCapture:
         return headers, request_id, device["id"]
 
     async def test_signed_capture_becomes_a_photo(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
-        headers, request_id, device_id = await self.setup(client, world, phones.iphone)
+        headers, request_id, device_id = await self.setup(client, world, iphone)
         t = await ticket(client, headers, request_id, device_id)
-        text = claim(JPEG, t["ticket"], request_id, b64(phones.iphone.key_id))
+        text = claim(JPEG, t["ticket"], request_id, b64(iphone.key_id))
         proof = await upload(
-            client, headers, request_id, JPEG, text, b64(phones.iphone.assert_(text.encode()))
+            client, headers, request_id, JPEG, text, b64(iphone.assert_(text.encode()))
         )
         assert (proof["source"], proof["flags"]) == ("photo", ["camera_signed"])
         assert proof["captured_at"] is not None
 
     async def test_plain_upload_stays_a_file(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
-        headers, request_id, _ = await self.setup(client, world, phones.iphone)
+        headers, request_id, _ = await self.setup(client, world, iphone)
         assert (await upload(client, headers, request_id, JPEG))["source"] == "file"
 
     async def test_edited_photo_is_a_file(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
         """The bytes no longer match the hash the device signed."""
-        headers, request_id, device_id = await self.setup(client, world, phones.iphone)
+        headers, request_id, device_id = await self.setup(client, world, iphone)
         t = await ticket(client, headers, request_id, device_id)
-        text = claim(JPEG, t["ticket"], request_id, b64(phones.iphone.key_id))
+        text = claim(JPEG, t["ticket"], request_id, b64(iphone.key_id))
         edited = JPEG + b"edited"
         proof = await upload(
-            client, headers, request_id, edited, text, b64(phones.iphone.assert_(text.encode()))
+            client, headers, request_id, edited, text, b64(iphone.assert_(text.encode()))
         )
         assert proof["source"] == "file"
 
     async def test_ticket_works_once(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
-        headers, request_id, device_id = await self.setup(client, world, phones.iphone)
+        headers, request_id, device_id = await self.setup(client, world, iphone)
         t = await ticket(client, headers, request_id, device_id)
-        text = claim(JPEG, t["ticket"], request_id, b64(phones.iphone.key_id))
+        text = claim(JPEG, t["ticket"], request_id, b64(iphone.key_id))
         first = await upload(
-            client, headers, request_id, JPEG, text, b64(phones.iphone.assert_(text.encode()))
+            client, headers, request_id, JPEG, text, b64(iphone.assert_(text.encode()))
         )
         again = await upload(
             client,
@@ -284,106 +228,104 @@ class TestIphoneCapture:
             request_id,
             JPEG + b"2",
             text,
-            b64(phones.iphone.assert_(text.encode())),
+            b64(iphone.assert_(text.encode())),
         )
         assert (first["source"], again["source"]) == ("photo", "file")
 
     async def test_failed_capture_still_burns_the_ticket(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
-        headers, request_id, device_id = await self.setup(client, world, phones.iphone)
+        headers, request_id, device_id = await self.setup(client, world, iphone)
         t = await ticket(client, headers, request_id, device_id)
-        text = claim(JPEG, t["ticket"], request_id, b64(phones.iphone.key_id))
+        text = claim(JPEG, t["ticket"], request_id, b64(iphone.key_id))
         await upload(
             client,
             headers,
             request_id,
             JPEG + b"edited",
             text,
-            b64(phones.iphone.assert_(text.encode())),
+            b64(iphone.assert_(text.encode())),
         )
         retry = await upload(
-            client, headers, request_id, JPEG, text, b64(phones.iphone.assert_(text.encode()))
+            client, headers, request_id, JPEG, text, b64(iphone.assert_(text.encode()))
         )
         assert retry["source"] == "file"
 
     async def test_expired_ticket_is_a_file(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
-        headers, request_id, device_id = await self.setup(client, world, phones.iphone)
+        headers, request_id, device_id = await self.setup(client, world, iphone)
         t = await ticket(client, headers, request_id, device_id)
         async with world.sessionmaker() as session:
             await session.execute(
                 update(CaptureTicket).values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
             )
             await session.commit()
-        text = claim(JPEG, t["ticket"], request_id, b64(phones.iphone.key_id))
+        text = claim(JPEG, t["ticket"], request_id, b64(iphone.key_id))
         proof = await upload(
-            client, headers, request_id, JPEG, text, b64(phones.iphone.assert_(text.encode()))
+            client, headers, request_id, JPEG, text, b64(iphone.assert_(text.encode()))
         )
         assert proof["source"] == "file"
 
     async def test_capture_time_outside_the_ticket_is_a_file(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
-        headers, request_id, device_id = await self.setup(client, world, phones.iphone)
+        headers, request_id, device_id = await self.setup(client, world, iphone)
         t = await ticket(client, headers, request_id, device_id)
         old = datetime.now(UTC) - timedelta(days=3)
-        text = claim(JPEG, t["ticket"], request_id, b64(phones.iphone.key_id), captured_at=old)
+        text = claim(JPEG, t["ticket"], request_id, b64(iphone.key_id), captured_at=old)
         proof = await upload(
-            client, headers, request_id, JPEG, text, b64(phones.iphone.assert_(text.encode()))
+            client, headers, request_id, JPEG, text, b64(iphone.assert_(text.encode()))
         )
         assert proof["source"] == "file"
 
     async def test_ticket_for_another_request_is_a_file(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
-        headers, request_id, device_id = await self.setup(client, world, phones.iphone)
+        headers, request_id, device_id = await self.setup(client, world, iphone)
         other = (await new_request(client, headers))["request"]["id"]
         t = await ticket(client, headers, other, device_id)
-        text = claim(JPEG, t["ticket"], request_id, b64(phones.iphone.key_id))
+        text = claim(JPEG, t["ticket"], request_id, b64(iphone.key_id))
         proof = await upload(
-            client, headers, request_id, JPEG, text, b64(phones.iphone.assert_(text.encode()))
+            client, headers, request_id, JPEG, text, b64(iphone.assert_(text.encode()))
         )
         assert proof["source"] == "file"
 
     async def test_replayed_assertion_is_a_file(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
         """App Attest's counter must increase; an old assertion cannot be reused."""
-        headers, request_id, device_id = await self.setup(client, world, phones.iphone)
+        headers, request_id, device_id = await self.setup(client, world, iphone)
         t1 = await ticket(client, headers, request_id, device_id)
-        text1 = claim(JPEG, t1["ticket"], request_id, b64(phones.iphone.key_id))
-        await upload(
-            client, headers, request_id, JPEG, text1, b64(phones.iphone.assert_(text1.encode()))
-        )
+        text1 = claim(JPEG, t1["ticket"], request_id, b64(iphone.key_id))
+        await upload(client, headers, request_id, JPEG, text1, b64(iphone.assert_(text1.encode())))
         t2 = await ticket(client, headers, request_id, device_id)
-        text2 = claim(PNG_LIKE, t2["ticket"], request_id, b64(phones.iphone.key_id))
-        replay = b64(phones.iphone.assert_(text2.encode(), counter=1))
+        text2 = claim(PNG_LIKE, t2["ticket"], request_id, b64(iphone.key_id))
+        replay = b64(iphone.assert_(text2.encode(), counter=1))
         assert (await upload(client, headers, request_id, PNG_LIKE, text2, replay))[
             "source"
         ] == "file"
 
     async def test_another_phones_signature_is_a_file(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
-        headers, request_id, device_id = await self.setup(client, world, phones.iphone)
+        headers, request_id, device_id = await self.setup(client, world, iphone)
         t = await ticket(client, headers, request_id, device_id)
-        text = claim(JPEG, t["ticket"], request_id, b64(phones.iphone.key_id))
+        text = claim(JPEG, t["ticket"], request_id, b64(iphone.key_id))
         forged = b64(AppleDevice().assert_(text.encode()))
         assert (await upload(client, headers, request_id, JPEG, text, forged))["source"] == "file"
 
     async def test_revoked_device_cannot_capture(
-        self, client: httpx.AsyncClient, world: World, phones: Phones
+        self, client: httpx.AsyncClient, world: World, iphone: AppleDevice
     ) -> None:
-        headers, request_id, device_id = await self.setup(client, world, phones.iphone)
+        headers, request_id, device_id = await self.setup(client, world, iphone)
         t = await ticket(client, headers, request_id, device_id)
         guardian = await login(client, world.guardian_key)
         revoked = await client.delete(f"/api/v1/capture/devices/{device_id}", headers=guardian)
         assert revoked.json()["revoked_at"] is not None
-        text = claim(JPEG, t["ticket"], request_id, b64(phones.iphone.key_id))
+        text = claim(JPEG, t["ticket"], request_id, b64(iphone.key_id))
         proof = await upload(
-            client, headers, request_id, JPEG, text, b64(phones.iphone.assert_(text.encode()))
+            client, headers, request_id, JPEG, text, b64(iphone.assert_(text.encode()))
         )
         assert proof["source"] == "file"
         refused = await client.post(
@@ -395,29 +337,6 @@ class TestIphoneCapture:
 
 
 PNG_LIKE = b"\x89PNG\r\n\x1a\n" + b"second receipt" * 10
-
-
-async def test_android_signed_capture_becomes_a_photo(
-    client: httpx.AsyncClient, world: World, phones: Phones
-) -> None:
-    headers = await login(client, world.dependent_key)
-    device = (await enrol_android(client, headers, phones.android)).json()
-    request_id = (await new_request(client, headers))["request"]["id"]
-    t = await ticket(client, headers, request_id, device["id"])
-    text = claim(JPEG, t["ticket"], request_id, device["key_id"])
-    proof = await upload(
-        client, headers, request_id, JPEG, text, b64(phones.android.sign(text.encode()))
-    )
-    assert proof["source"] == "photo"
-
-    # A claim changed after signing no longer matches the device's signature.
-    t2 = await ticket(client, headers, request_id, device["id"])
-    signed = claim(PNG_LIKE, t2["ticket"], request_id, device["key_id"])
-    tampered = signed.replace("1.0.0", "9.9.9")
-    forged = await upload(
-        client, headers, request_id, PNG_LIKE, tampered, b64(phones.android.sign(signed.encode()))
-    )
-    assert forged["source"] == "file"
 
 
 class TestCameraOnlyEngine:

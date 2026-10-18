@@ -61,11 +61,6 @@ services:
       AGENT_WALLET_PUBKEY: ${AGENT_WALLET_PUBKEY:?set in .env}
       APPLE_APP_ID: ${APPLE_APP_ID:-}
       APPLE_APP_ATTEST_PRODUCTION: ${APPLE_APP_ATTEST_PRODUCTION:-true}
-      ANDROID_PACKAGE: ${ANDROID_PACKAGE:-}
-      ANDROID_SIGNING_CERT_SHA256: ${ANDROID_SIGNING_CERT_SHA256:-}
-      # A path inside the container: mount the service account JSON there (e.g. with a
-      # docker-compose.override.yml volume) and set this variable.
-      PLAY_INTEGRITY_SERVICE_ACCOUNT_FILE: ${PLAY_INTEGRITY_SERVICE_ACCOUNT_FILE:-}
       CAMERA_ONLY_PROOFS: ${CAMERA_ONLY_PROOFS:-false}
       RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-30}
       LLM_TOKEN_BUDGET_PER_FAMILY_PER_DAY: ${LLM_TOKEN_BUDGET_PER_FAMILY_PER_DAY:-200000}

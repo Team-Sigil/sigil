@@ -37,7 +37,6 @@ from gateway.core.config import get_settings
 from gateway.core.crypto import decrypt, encrypt
 from gateway.enums import (
     Audience,
-    DevicePlatform,
     GuardianDecision,
     NoncePurpose,
     PolicyStatus,
@@ -268,20 +267,17 @@ class Proof(Base):
 
 
 class CaptureDevice(Base):
-    """A dependent's phone with an attested hardware key (Apple App Attest, or Android key
-    attestation plus Play Integrity). Only its signed captures become `source: "photo"`."""
+    """A dependent's iPhone with an App Attest key (Secure Enclave, attested by Apple). Only
+    its signed captures become `source: "photo"`."""
 
     __tablename__ = "capture_devices"
 
     id: Mapped[uuid.UUID] = uuid_pk()
     family_id: Mapped[uuid.UUID] = family_fk()
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
-    platform: Mapped[DevicePlatform] = mapped_column(str_enum(DevicePlatform, "device_platform"))
-    # iOS: base64 of App Attest's key id. Android: hex SHA-256 of the public key.
-    key_id: Mapped[str] = mapped_column(String(100), unique=True)
+    key_id: Mapped[str] = mapped_column(String(100), unique=True)  # base64 App Attest key id
     public_key: Mapped[bytes] = mapped_column(LargeBinary)  # SubjectPublicKeyInfo DER
-    counter: Mapped[int] = mapped_column(BigInteger, server_default="0")  # App Attest only
-    security_level: Mapped[str | None] = mapped_column(String(32))
+    counter: Mapped[int] = mapped_column(BigInteger, server_default="0")  # against replays
     created_at: Mapped[datetime] = created_at()
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

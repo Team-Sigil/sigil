@@ -1,12 +1,12 @@
-"""Verified in-app capture: enrol the dependent's phone, then get a ticket per receipt.
+"""Verified in-app capture on iOS: enrol the dependent's iPhone, then get a ticket per receipt.
 
-1. `POST /capture/challenge`, then `POST /capture/devices` with the platform attestation.
+1. `POST /capture/challenge`, then `POST /capture/devices` with the App Attest attestation.
 2. For each receipt: `POST /requests/{id}/capture-tickets`, take the photo in the app, sign the
    claim with the device key, upload it with `capture_claim` and `capture_signature`.
 """
 
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,36 +31,20 @@ class Challenge(BaseModel):
     expires_at: datetime
 
 
-class IosEnrolment(BaseModel):
+class Enrolment(BaseModel):
     """`key_id` and `attestation_object` from `DCAppAttestService`, base64. The app attests
     with clientDataHash = SHA-256(UTF-8 challenge)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    platform: Literal["ios"]
     challenge: str = Field(min_length=1, max_length=64)
     key_id: Base64
     attestation_object: Base64
 
 
-class AndroidEnrolment(BaseModel):
-    """The key's attestation chain (leaf first, base64 DER), generated with the UTF-8
-    challenge as the attestation challenge, and a classic Play Integrity token requested with
-    the challenge as its nonce."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    platform: Literal["android"]
-    challenge: str = Field(min_length=1, max_length=64)
-    certificate_chain: list[Base64] = Field(min_length=1, max_length=10)
-    integrity_token: str = Field(min_length=1, max_length=16_000)
-
-
 class DeviceView(BaseModel):
     id: str
-    platform: str
     key_id: str
-    security_level: str | None
     created_at: datetime
     revoked_at: datetime | None
 
@@ -81,9 +65,7 @@ class Ticket(BaseModel):
 def _device_view(device: CaptureDevice) -> DeviceView:
     return DeviceView(
         id=str(device.id),
-        platform=device.platform.value,
         key_id=device.key_id,
-        security_level=device.security_level,
         created_at=device.created_at,
         revoked_at=device.revoked_at,
     )
@@ -104,38 +86,23 @@ async def challenge(dependent: FamilyDependentDep, session: SessionDep) -> Chall
 
 @router.post("/capture/devices")
 async def enrol(
-    body: Annotated[IosEnrolment | AndroidEnrolment, Field(discriminator="platform")],
-    dependent: FamilyDependentDep,
-    request: Request,
-    session: SessionDep,
+    body: Enrolment, dependent: FamilyDependentDep, request: Request, session: SessionDep
 ) -> DeviceView:
     now = datetime.now(UTC)
     # Single use, bound to this dependent's wallet, burned even if attestation then fails.
     await nonces.consume(
         session, dependent.user.wallet_address, NoncePurpose.ENROL_DEVICE, body.challenge, now
     )
-    if isinstance(body, IosEnrolment):
-        device = await service.enrol_ios(
-            session,
-            _config(request),
-            dependent.family,
-            dependent.user,
-            challenge=body.challenge,
-            key_id_b64=body.key_id,
-            attestation_b64=body.attestation_object,
-            now=now,
-        )
-    else:
-        device = await service.enrol_android(
-            session,
-            _config(request),
-            dependent.family,
-            dependent.user,
-            challenge=body.challenge,
-            chain_b64=body.certificate_chain,
-            integrity_token=body.integrity_token,
-            now=now,
-        )
+    device = await service.enrol(
+        session,
+        _config(request),
+        dependent.family,
+        dependent.user,
+        challenge=body.challenge,
+        key_id_b64=body.key_id,
+        attestation_b64=body.attestation_object,
+        now=now,
+    )
     return _device_view(device)
 
 
@@ -151,7 +118,7 @@ async def list_devices(member: MemberDep, session: SessionDep) -> list[DeviceVie
 
 @router.delete("/capture/devices/{device_id}")
 async def revoke_device(device_id: str, member: MemberDep, session: SessionDep) -> DeviceView:
-    """The dependent can revoke their own phone; the guardian can revoke any family device."""
+    """The dependent can revoke their own iPhone; the guardian can revoke any family device."""
     owner = member.user if member.role == Role.DEPENDENT else None
     device = await service.family_device(session, member.family, device_id, owner)
     return _device_view(await service.revoke(session, device, datetime.now(UTC)))

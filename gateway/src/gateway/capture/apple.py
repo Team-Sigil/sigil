@@ -17,7 +17,6 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from gateway.capture import der
-from gateway.capture.chains import verify_chain
 from gateway.capture.errors import AttestationError
 
 NONCE_EXTENSION_OID = x509.ObjectIdentifier("1.2.840.113635.100.8.2")
@@ -54,6 +53,30 @@ def parse_auth_data(data: bytes, attested: bool) -> AuthData:
     if len(credential_id) != length:
         raise AttestationError("credential id truncated")
     return AuthData(rp_id_hash, counter, aaguid, credential_id)
+
+
+def verify_chain(
+    chain: list[x509.Certificate], roots: list[x509.Certificate], now: datetime
+) -> None:
+    """Each certificate is signed by the next, the last by a trusted root; all are valid now."""
+    if not chain:
+        raise AttestationError("empty certificate chain")
+    for cert, issuer in zip(chain, [*chain[1:], None], strict=True):
+        if not cert.not_valid_before_utc <= now <= cert.not_valid_after_utc:
+            raise AttestationError("certificate outside its validity period")
+        if issuer is None:
+            if not any(_signed_by(cert, root) for root in roots):
+                raise AttestationError("chain does not end at a trusted root")
+        elif not _signed_by(cert, issuer):
+            raise AttestationError("broken certificate chain")
+
+
+def _signed_by(cert: x509.Certificate, issuer: x509.Certificate) -> bool:
+    try:
+        cert.verify_directly_issued_by(issuer)
+    except (ValueError, TypeError, InvalidSignature):
+        return False
+    return True
 
 
 def _nonce_from_extension(cert: x509.Certificate) -> bytes:

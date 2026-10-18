@@ -15,7 +15,7 @@ class NoncePurpose(StrEnum):
     ANSWER_QUESTION = "answer-question"
     FREEZE = "freeze"
     REGISTER_DEPENDENT = "register-dependent"
-    ENROL_DEVICE = "enrol-device"  # attestation challenge for a capture device
+    ENROL_DEVICE = "enrol-device"  # App Attest challenge for a capture device
 
 
 class PolicyStatus(StrEnum):
@@ -31,11 +31,6 @@ class ThreadRole(StrEnum):
     AGENT = "agent"
     GUARDIAN_ANSWER = "guardian_answer"
     SYSTEM_EVENT = "system_event"
-
-
-class DevicePlatform(StrEnum):
-    IOS = "ios"
-    ANDROID = "android"
 
 
 class TransferTrigger(StrEnum):

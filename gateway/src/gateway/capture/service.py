@@ -1,5 +1,5 @@
-"""Device enrolment, capture tickets and capture verification (agent layer proof-images.md,
-"Verified in-app capture").
+"""iPhone enrolment (App Attest), capture tickets and capture verification (agent layer
+proof-images.md, "Verified in-app capture").
 
 A capture becomes `source: "photo"` only if, in order: the key is registered and attested for
 this dependent; the signature over the claim is valid; the ticket is unused, unexpired and for
@@ -17,21 +17,18 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.capture import android, apple
+from gateway.capture import apple
 from gateway.capture.config import CaptureConfig
 from gateway.capture.errors import AttestationError
 from gateway.core.errors import ConflictError, DomainError, NotFoundError
 from gateway.db import audit_log
 from gateway.db.models import CaptureDevice, CaptureTicket, Family, Request, User
-from gateway.enums import AuditEvent, DevicePlatform
+from gateway.enums import AuditEvent
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +38,7 @@ TICKET_TTL = timedelta(minutes=5)
 class AttestationFailedError(DomainError):
     code = "ATTESTATION_FAILED"
     status = 422
-    message = "This device could not be verified. Receipts from it will count as plain uploads."
+    message = "This iPhone could not be verified. Receipts from it will count as plain uploads."
 
 
 class CaptureClaim(BaseModel):
@@ -71,40 +68,7 @@ def _b64(value: str) -> bytes:
         raise AttestationError("not base64") from exc
 
 
-async def _store_device(
-    session: AsyncSession,
-    family: Family,
-    user: User,
-    platform: DevicePlatform,
-    key_id: str,
-    public_key: bytes,
-    security_level: str | None,
-) -> CaptureDevice:
-    device = CaptureDevice(
-        family_id=family.id,
-        user_id=user.id,
-        platform=platform,
-        key_id=key_id,
-        public_key=public_key,
-        security_level=security_level,
-    )
-    session.add(device)
-    try:
-        await session.flush()
-    except IntegrityError as exc:
-        await session.rollback()
-        raise ConflictError("This device key is already enrolled.") from exc
-    await audit_log.append(
-        session,
-        family.id,
-        AuditEvent.DEVICE_ENROLLED,
-        {"device_id": str(device.id), "platform": platform.value, "security_level": security_level},
-    )
-    await session.commit()
-    return device
-
-
-async def enrol_ios(
+async def enrol(
     session: AsyncSession,
     config: CaptureConfig,
     family: Family,
@@ -115,6 +79,7 @@ async def enrol_ios(
     attestation_b64: str,
     now: datetime,
 ) -> CaptureDevice:
+    """Verifies the App Attest attestation for this challenge and stores the attested key."""
     try:
         if not config.apple_app_id:
             raise AttestationError("App Attest is not configured")
@@ -128,55 +93,26 @@ async def enrol_ios(
             now=now,
         )
     except AttestationError as exc:
-        logger.warning("iOS enrolment refused: %s", exc)
+        logger.warning("Device enrolment refused: %s", exc)
         raise AttestationFailedError() from exc
-    return await _store_device(
-        session,
-        family,
-        user,
-        DevicePlatform.IOS,
-        key_id_b64,
-        enrolled.public_key_der,
-        "secure_enclave",
+
+    device = CaptureDevice(
+        family_id=family.id,
+        user_id=user.id,
+        key_id=key_id_b64,
+        public_key=enrolled.public_key_der,
     )
-
-
-async def enrol_android(
-    session: AsyncSession,
-    config: CaptureConfig,
-    family: Family,
-    user: User,
-    *,
-    challenge: str,
-    chain_b64: list[str],
-    integrity_token: str,
-    now: datetime,
-) -> CaptureDevice:
+    session.add(device)
     try:
-        if not config.android_package or not config.android_signing_digests:
-            raise AttestationError("Android attestation is not configured")
-        enrolled = android.verify_key_attestation(
-            chain=[_b64(c) for c in chain_b64],
-            challenge=challenge.encode(),
-            package=config.android_package,
-            signing_digests=config.android_signing_digests,
-            roots=config.google_roots,
-            now=now,
-        )
-        await config.integrity.verify(integrity_token, challenge, int(now.timestamp() * 1000))
-    except AttestationError as exc:
-        logger.warning("Android enrolment refused: %s", exc)
-        raise AttestationFailedError() from exc
-    key_id = hashlib.sha256(enrolled.public_key_der).hexdigest()
-    return await _store_device(
-        session,
-        family,
-        user,
-        DevicePlatform.ANDROID,
-        key_id,
-        enrolled.public_key_der,
-        enrolled.security_level,
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise ConflictError("This device key is already enrolled.") from exc
+    await audit_log.append(
+        session, family.id, AuditEvent.DEVICE_ENROLLED, {"device_id": str(device.id)}
     )
+    await session.commit()
+    return device
 
 
 async def family_device(
@@ -222,30 +158,6 @@ async def issue_ticket(
     return ticket
 
 
-def _verify_signature(
-    device: CaptureDevice, claim_bytes: bytes, signature: bytes, config: CaptureConfig
-) -> int | None:
-    """Returns the new App Attest counter (iOS) or None (Android). Raises on a bad signature."""
-    if device.platform == DevicePlatform.IOS:
-        if not config.apple_app_id:
-            raise AttestationError("App Attest is not configured")
-        return apple.verify_assertion(
-            assertion=signature,
-            client_data=claim_bytes,
-            public_key_der=device.public_key,
-            stored_counter=device.counter,
-            app_id=config.apple_app_id,
-        )
-    public_key = serialization.load_der_public_key(device.public_key)
-    if not isinstance(public_key, ec.EllipticCurvePublicKey):
-        raise AttestationError("stored key is not an EC key")
-    try:
-        public_key.verify(signature, claim_bytes, ec.ECDSA(hashes.SHA256()))
-    except InvalidSignature as exc:
-        raise AttestationError("capture signature invalid") from exc
-    return None
-
-
 async def verify_capture(
     session: AsyncSession,
     config: CaptureConfig,
@@ -277,8 +189,16 @@ async def verify_capture(
         if device is None:
             raise AttestationError("device not enrolled for this dependent")
 
-        # 2. The signature over the exact claim bytes is valid.
-        counter = _verify_signature(device, claim_bytes, _b64(signature_b64), config)
+        # 2. The App Attest assertion over the exact claim bytes is valid, counter increasing.
+        if not config.apple_app_id:
+            raise AttestationError("App Attest is not configured")
+        counter = apple.verify_assertion(
+            assertion=_b64(signature_b64),
+            client_data=claim_bytes,
+            public_key_der=device.public_key,
+            stored_counter=device.counter,
+            app_id=config.apple_app_id,
+        )
 
         # 3. The ticket is unused, unexpired and for this request and device (consumed here).
         ticket: CaptureTicket | None = await session.scalar(
@@ -308,6 +228,5 @@ async def verify_capture(
         logger.warning("Capture not verified for request %s: %s", request.id, exc)
         return None
 
-    if counter is not None:
-        device.counter = counter
+    device.counter = counter
     return VerifiedCapture(device_id=device.id, captured_at=claim.captured_at)

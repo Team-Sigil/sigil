@@ -1,4 +1,4 @@
-"""Verified in-app capture: attested devices, capture tickets, proof capture fields.
+"""Verified in-app capture (iOS App Attest): devices, capture tickets, proof capture fields.
 
 Revision ID: 0002
 Revises: 0001
@@ -41,22 +41,9 @@ def upgrade() -> None:
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column("family_id", sa.UUID(), nullable=False),
         sa.Column("user_id", sa.UUID(), nullable=False),
-        sa.Column(
-            "platform",
-            sa.Enum(
-                "ios",
-                "android",
-                name="device_platform",
-                native_enum=False,
-                create_constraint=True,
-                length=32,
-            ),
-            nullable=False,
-        ),
         sa.Column("key_id", sa.String(length=100), nullable=False),
         sa.Column("public_key", sa.LargeBinary(), nullable=False),
         sa.Column("counter", sa.BigInteger(), server_default="0", nullable=False),
-        sa.Column("security_level", sa.String(length=32), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
