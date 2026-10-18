@@ -103,12 +103,15 @@ class RunFacts:
     proof_requested: bool
     guardian_asked: bool
     requested_amount: int | None
+    amount_pending: int = 0  # accepted by the engine, not yet confirmed on chain
 
 
 def reconcile_outcome(claimed: Outcome, facts: RunFacts, log: GuardrailLog) -> Outcome:
     """Return the outcome that matches the facts; log any correction."""
     if facts.auditor_flagged:
         truth = Outcome.AUDITOR_FLAGGED
+    elif facts.amount_pending > 0 and facts.amount_sent == 0:
+        truth = Outcome.TRANSFER_PENDING  # may still go out: never "declined" or "blocked"
     elif facts.amount_sent > 0:
         full = facts.requested_amount is None or facts.amount_sent >= facts.requested_amount
         if claimed in (Outcome.SENT_PARTIAL, Outcome.COUNTER_OFFER) and not full:

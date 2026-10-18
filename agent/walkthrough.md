@@ -223,14 +223,21 @@ http :8200/mock/state "Authorization:Bearer mock-admin-token"
 ## 6. The engine's limits hold even if the agent is bypassed
 
 These calls go straight to the platform's transfer endpoint with the maker's token, as a
-fully compromised maker could. The engine still decides.
+fully compromised maker could. The engine still decides. They use a request for 40.00, so
+the engine's "never more than was asked" rule leaves room for each check to show:
+
+```bash
+http POST :8200/mock/requests "Authorization:Bearer mock-admin-token" \
+    id=r-direct dependent_id=d1 message="Money for bus fare and books" amount_requested:=40000000
+# expect: 200
+```
 
 An in-limit transfer goes through:
 
 ```bash
 http POST :8200/agent/v1/transfers "Authorization:Bearer maker-test-token" \
     Idempotency-Key:walkthrough-bus-1 \
-    dependent_id=d1 request_id=r-books trigger=request amount:=5000000 purpose="bus fare" \
+    dependent_id=d1 request_id=r-direct trigger=request amount:=5000000 purpose="bus fare" \
     category=transport category_confidence:=0.9 reasoning="Walkthrough transfer." \
     idempotency_key=walkthrough-bus-1 policy_version:=3
 # expect: 200
@@ -243,7 +250,7 @@ paid twice:
 ```bash
 http POST :8200/agent/v1/transfers "Authorization:Bearer maker-test-token" \
     Idempotency-Key:walkthrough-bus-1 \
-    dependent_id=d1 request_id=r-books trigger=request amount:=5000000 purpose="bus fare" \
+    dependent_id=d1 request_id=r-direct trigger=request amount:=5000000 purpose="bus fare" \
     category=transport category_confidence:=0.9 reasoning="Walkthrough transfer." \
     idempotency_key=walkthrough-bus-1 policy_version:=3
 # expect: 200
@@ -255,7 +262,7 @@ The header and body keys must match:
 ```bash
 http POST :8200/agent/v1/transfers "Authorization:Bearer maker-test-token" \
     Idempotency-Key:something-else \
-    dependent_id=d1 request_id=r-books trigger=request amount:=5000000 purpose="bus fare" \
+    dependent_id=d1 request_id=r-direct trigger=request amount:=5000000 purpose="bus fare" \
     category=transport category_confidence:=0.9 reasoning="Walkthrough transfer." \
     idempotency_key=walkthrough-bus-2 policy_version:=3
 # expect: 400
@@ -266,7 +273,7 @@ Above the per-request maximum:
 ```bash
 http POST :8200/agent/v1/transfers "Authorization:Bearer maker-test-token" \
     Idempotency-Key:walkthrough-big \
-    dependent_id=d1 request_id=r-books trigger=request amount:=5000000000 purpose="new phone" \
+    dependent_id=d1 request_id=r-direct trigger=request amount:=5000000000 purpose="new phone" \
     category=other category_confidence:=1 reasoning="Trust me." \
     idempotency_key=walkthrough-big policy_version:=3
 # expect: 200
@@ -280,7 +287,7 @@ threshold), so a maker cannot skip the checker:
 ```bash
 http POST :8200/agent/v1/transfers "Authorization:Bearer maker-test-token" \
     Idempotency-Key:walkthrough-skip-review \
-    dependent_id=d1 request_id=r-books trigger=request amount:=26000000 purpose="books" \
+    dependent_id=d1 request_id=r-direct trigger=request amount:=26000000 purpose="books" \
     category=education category_confidence:=1 reasoning="No review needed." \
     idempotency_key=walkthrough-skip-review policy_version:=3
 # expect: 200

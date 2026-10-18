@@ -54,7 +54,7 @@ class WalkthroughLLM:
     def __init__(self, model: str = "walkthrough-model"):
         self.model = model
 
-    def create(self, *, system: str, messages: list[dict], tools: list[dict]):
+    def create(self, *, system: str, messages: list[dict], tools: list[dict], timeout: float | None = None):
         last = messages[-1]["content"]
         if isinstance(last, list) and last and isinstance(last[0], dict) and last[0].get("type") == "tool_result":
             result = last[0]
@@ -85,7 +85,7 @@ class WalkthroughLLM:
                                             "matches_claim": True}} if amount >= 25 else {})),
         )
 
-    def parse(self, *, system: str, messages: list[dict], output_format: type):
+    def parse(self, *, system: str, messages: list[dict], output_format: type, timeout: float | None = None):
         seen = all_text(messages).lower()
         concerned = any(k in seen for k in _SUSPICIOUS)
         if output_format is IndependentAssessment:

@@ -57,8 +57,9 @@ Keep replies to the dependent short, warm and plain. Do not lecture.
 
 ALLOWANCE_INSTRUCTION = """\
 It is allowance day. Decide this week's allowance within the guardian's guidance. The
-usual amount is {usual}. You may adjust it (for example a little less after an
-overspent week) but explain why. Call request_transfer with category "allowance", then
+usual amount is {usual}, which is also the most you can send: you may lower it (for
+example a little less after an overspent week) but explain why. If you think it should
+be higher, send the usual amount and tell the guardian with notify_guardian. Call request_transfer with category "allowance", then
 finish with a short note to the dependent. If no allowance should be sent, explain why
 in finish with outcome "declined".
 {languages}

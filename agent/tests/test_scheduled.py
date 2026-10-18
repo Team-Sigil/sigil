@@ -37,11 +37,17 @@ def test_routine_allowance_skips_auditor(platform, make_agent):
     assert auditor.calls == []
 
 
-def test_allowance_above_usual_is_reviewed(platform, make_agent):
-    agent, _, auditor = make_agent(_allowance(35), AGREE)
-    agent.run_allowance("d1", "2026-W43")
-    assert len(auditor.calls) == 2
-    assert platform.sent[0].auditor_verdict_id is not None
+def test_allowance_above_usual_is_refused_before_review(platform, make_agent):
+    """The engine caps the allowance at the signed amount, so the agent does too: raising
+    it needs the guardian, and the Auditor is never asked."""
+    agent, _, auditor = make_agent(
+        [reply(transfer(35, "allowance", reasoning="A bigger week.")),
+         reply(finish("declined", "No change to the allowance this week."))],
+        AGREE,
+    )
+    record = agent.run_allowance("d1", "2026-W43")
+    assert platform.sent == [] and auditor.calls == []
+    assert "allowance_ceiling" in " ".join(record.guardrail_events)
 
 
 def test_allowance_ceiling_enforced(platform, make_agent):

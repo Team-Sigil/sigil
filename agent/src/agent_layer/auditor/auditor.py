@@ -9,6 +9,7 @@ transfer (idempotency key + amount + category).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from agent_layer.auditor.prompts import AUDITOR_SYSTEM, PHASE1_INSTRUCTION, PHASE2_INSTRUCTION
@@ -96,14 +97,25 @@ class Auditor:
             + f"\n\n{PHASE2_INSTRUCTION}"
         )
 
-    def review(self, case: ReviewCase, budget: TokenBudget, log: GuardrailLog) -> ReviewResult:
+    def review(
+        self,
+        case: ReviewCase,
+        budget: TokenBudget,
+        log: GuardrailLog,
+        time_left: Callable[[], float] | None = None,
+    ) -> ReviewResult:
+        """``time_left`` gives each call's timeout and raises ``RunDeadline`` when the run's
+        time is spent, which fails closed like any other error."""
         assessment: IndependentAssessment | None = None
         pt = PlatformText(log)
         try:
             budget.ensure_available()
             content = [*case.proof_images, {"type": "text", "text": self._case_message(case, pt)}]
             messages: list[dict] = [{"role": "user", "content": content}]
-            first = self._llm.parse(system=AUDITOR_SYSTEM, messages=messages, output_format=IndependentAssessment)
+            first = self._llm.parse(
+                system=AUDITOR_SYSTEM, messages=messages, output_format=IndependentAssessment,
+                timeout=time_left() if time_left else None,
+            )
             budget.record(first.response)
             if first.parsed is None or first.response.stop_reason == "refusal":
                 raise LLMUnavailable("no independent assessment")
@@ -113,7 +125,10 @@ class Auditor:
                 {"role": "assistant", "content": first.response.content},
                 {"role": "user", "content": self._decision_message(case, pt)},
             ]
-            second = self._llm.parse(system=AUDITOR_SYSTEM, messages=messages, output_format=AuditorVerdict)
+            second = self._llm.parse(
+                system=AUDITOR_SYSTEM, messages=messages, output_format=AuditorVerdict,
+                timeout=time_left() if time_left else None,
+            )
             budget.record(second.response)
             if second.parsed is None or second.response.stop_reason == "refusal":
                 raise LLMUnavailable("no verdict")

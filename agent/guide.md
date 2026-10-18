@@ -183,6 +183,7 @@ A `200` means the agent reached a decision, including "no". Check `outcome` and
 | `declined` | No | The agent said no, with an alternative | Show the reply |
 | `out_of_scope` | No | The message wasn't about the allowance (for example "what is 1+1?"); the reply says what the agent can help with | Show the reply. Consider a per-dependent daily request quota at your gateway: every message runs the AI |
 | `blocked` | No | The engine refused the transfer (an outer limit, the freeze switch or funds) | Show the reply |
+| `transfer_pending` | Not yet, but it may still go out | The platform accepted the transfer, but the chain hasn't confirmed it (for example, the signer is down). The agent won't send again for this request | Show the reply ("on its way"). Don't offer a retry: the engine finishes it |
 | `safe_fallback` | No further money | The agent stopped before deciding (for example, the model was unavailable or the family's usage budget ran out) and the guardian has been asked | Show the reply; nothing else is needed |
 
 `amount_sent` is the source of truth for money: it is what the engine confirmed for
@@ -343,8 +344,10 @@ The model being unavailable is **not** an HTTP error on `process`: you get `200`
 ## 8. Retries, timeouts and concurrency
 
 **Timeouts.** `process` runs one or two AI agents and may take from a few seconds to a
-couple of minutes. Use a client timeout of at least **3 minutes**. A timeout does not
-mean nothing happened: the agent may have finished after you gave up.
+couple of minutes. The agent caps every run at **150 seconds** (`AGENT_MAX_RUN_SECONDS`)
+and ends in `safe_fallback` when time runs out, so a client timeout of **3 minutes** is
+enough. A timeout does not mean nothing happened: the agent may have finished after you
+gave up.
 
 **Retrying `process` is safe for money.** Every transfer carries an idempotency key
 derived from the request and the state of its conversation. Calling `process` again on

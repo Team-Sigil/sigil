@@ -72,15 +72,16 @@ class ScriptedLLM:
             raise step
         return step
 
-    def create(self, *, system: str, messages: list[dict], tools: list[dict]) -> LLMResponse:
-        self.calls.append({"kind": "create", "system": system, "messages": copy.deepcopy(messages), "tools": tools})
+    def create(self, *, system: str, messages: list[dict], tools: list[dict], timeout: float | None = None) -> LLMResponse:
+        self.calls.append({"kind": "create", "system": system, "messages": copy.deepcopy(messages), "tools": tools,
+                           "timeout": timeout})
         step = self._next(messages)
         assert isinstance(step, LLMResponse), f"create() got {type(step)}"
         return step
 
-    def parse(self, *, system: str, messages: list[dict], output_format: type) -> ParsedResponse:
+    def parse(self, *, system: str, messages: list[dict], output_format: type, timeout: float | None = None) -> ParsedResponse:
         self.calls.append({"kind": "parse", "system": system, "messages": copy.deepcopy(messages),
-                           "output_format": output_format})
+                           "output_format": output_format, "timeout": timeout})
         step = self._next(messages)
         if isinstance(step, LLMResponse):  # e.g. a refusal
             return ParsedResponse(parsed=None, response=step)

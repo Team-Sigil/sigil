@@ -16,6 +16,8 @@ ends in a safe fallback: no further money moves and the guardian is asked.
 from __future__ import annotations
 
 import hashlib
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from agent_layer.auditor.auditor import Auditor, ReviewCase
@@ -47,7 +49,7 @@ from agent_layer.guardrails.input import PlatformText
 from agent_layer.i18n import dependent_locale, guardian_locale, language_instruction, t
 from agent_layer.guardrails.output import RunFacts, check_reply, reconcile_outcome, safe_reply, text_weight
 from agent_layer.guardrails.tools import Mode, ToolGuard, ToolRejected
-from agent_layer.llm import LLM, LLMUnavailable
+from agent_layer.llm import LLM, LLMUnavailable, RunDeadline
 from agent_layer.maker.context import PreparedInput, context_block, prepare_request_input
 from agent_layer.maker.prompts import ALLOWANCE_INSTRUCTION, MAKER_SYSTEM
 from agent_layer.maker.tools import tool_definitions
@@ -55,6 +57,8 @@ from agent_layer.money import to_base, to_display
 from agent_layer.platform_api import MakerAPI, PlatformAPIError
 
 FINISH_NUDGE = "Please call the finish tool now to end this request."
+# A model call needs at least this long; with less time left, the run stops.
+MIN_CALL_SECONDS = 10.0
 
 
 @dataclass
@@ -67,7 +71,9 @@ class _Run:
     log: GuardrailLog
     guard: ToolGuard
     budget: TokenBudget
+    deadline: float
     amount_sent: int = 0
+    amount_pending: int = 0
     transfer_blocked: bool = False
     auditor_flagged: bool = False
     proof_requested: bool = False
@@ -94,11 +100,27 @@ def _short_hash(text: str) -> str:
 
 
 class MakerAgent:
-    def __init__(self, llm: LLM, api: MakerAPI, auditor: Auditor, limits: Limits | None = None):
+    def __init__(
+        self,
+        llm: LLM,
+        api: MakerAPI,
+        auditor: Auditor,
+        limits: Limits | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ):
         self._llm = llm
         self._api = api
         self._auditor = auditor
         self._limits = limits or Limits()
+        self._clock = clock
+
+    def _time_left(self, run: _Run) -> float:
+        """Seconds left for the next model call; raises ``RunDeadline`` when too few."""
+        left = run.deadline - self._clock()
+        if left < MIN_CALL_SECONDS:
+            run.log.add("run_deadline", f"{self._limits.max_run_seconds:.0f}s")
+            raise RunDeadline("run time budget spent")
+        return left
 
     # ------------------------------------------------------------------ entry points
 
@@ -166,6 +188,7 @@ class MakerAgent:
             log=log,
             guard=ToolGuard(ctx, self._limits, log, mode=mode, request=request, proof_ids=prepared.proof_ids),
             budget=TokenBudget(self._api, ctx.guardian_id, log),
+            deadline=self._clock() + self._limits.max_run_seconds,
         )
 
     def _execute_run(self, run: _Run) -> DecisionRecord:
@@ -185,7 +208,9 @@ class MakerAgent:
         nudged = False
         for _ in range(self._limits.max_loop_turns):
             run.budget.ensure_available()
-            resp = self._llm.create(system=MAKER_SYSTEM, messages=messages, tools=tools)
+            resp = self._llm.create(
+                system=MAKER_SYSTEM, messages=messages, tools=tools, timeout=self._time_left(run)
+            )
             run.budget.record(resp)
             if resp.stop_reason in ("refusal", "max_tokens"):
                 run.log.add("model_stopped", str(resp.stop_reason))
@@ -289,7 +314,8 @@ class MakerAgent:
     def _transfer(self, run: _Run, args: RequestTransferArgs) -> str:
         amount = run.guard.precheck_transfer(args)
         run.guard.record_transfer_attempt()
-        triggers = trusted_triggers(
+        override = run.guard.guardian_override(amount)
+        triggers = [] if override else trusted_triggers(
             amount=amount,
             category=args.category,
             policy=run.ctx.policy,
@@ -302,6 +328,9 @@ class MakerAgent:
             proof_concerns=run.prepared.proof_concerns,
         )
 
+        if override:
+            # Exactly the amount the guardian signed for: the engine skips review too.
+            run.log.add("guardian_override", to_display(amount))
         verdict_id: str | None = None
         if triggers:
             review = self._auditor.review(
@@ -321,6 +350,7 @@ class MakerAgent:
                 ),
                 run.budget,
                 run.log,
+                time_left=lambda: self._time_left(run),
             )
             if not review.agreed:
                 run.auditor_flagged = True
@@ -372,6 +402,14 @@ class MakerAgent:
             if result.status == "duplicate":
                 run.log.add("idempotent_replay", run.idempotency_key)
             return f"Sent {to_display(result.amount)}. Call finish."
+        if result.status == "pending":
+            run.amount_pending += result.amount or amount
+            run.log.add("transfer_pending", to_display(result.amount or amount))
+            return (
+                f"The platform accepted {to_display(result.amount or amount)}, but the payment isn't "
+                "confirmed yet and may still go out. Don't send anything else. Call finish and tell "
+                "the dependent it's on its way."
+            )
         run.transfer_blocked = True
         reason = PlatformText(run.log).inline(
             result.reason or "outside the limits",
@@ -387,7 +425,7 @@ class MakerAgent:
     # -------------------------------------------------------------------- conclude
 
     def _fallback_to_guardian(self, run: _Run) -> None:
-        if run.mode != "request" or run.guardian_asked or run.amount_sent > 0:
+        if run.mode != "request" or run.guardian_asked or run.amount_sent > 0 or run.amount_pending > 0:
             return
         try:
             self._api.ask_guardian(
@@ -413,8 +451,10 @@ class MakerAgent:
             proof_requested=run.proof_requested,
             guardian_asked=run.guardian_asked,
             requested_amount=run.request.amount_requested if run.request else None,
+            amount_pending=run.amount_pending,
         )
         dep_locale, guard_locale = run.prepared.dependent_locale, run.prepared.guardian_locale
+        shown = run.amount_sent or run.amount_pending  # the amount fixed replies mention
         if run.finish is None:
             claimed = Outcome.SAFE_FALLBACK
             reply = safe_reply(Outcome.SAFE_FALLBACK, locale=dep_locale)
@@ -424,13 +464,13 @@ class MakerAgent:
             reply, summary = run.finish.reply_to_dependent, run.finish.summary_for_guardian
         if claimed is not Outcome.SAFE_FALLBACK:
             outcome = reconcile_outcome(claimed, facts, run.log)
-        elif run.auditor_flagged or run.amount_sent > 0:
+        elif run.auditor_flagged or run.amount_sent > 0 or run.amount_pending > 0:
             # Stopped early, but something already happened: report that, not a fallback.
             outcome = reconcile_outcome(Outcome.SENT_FULL, facts, GuardrailLog())
         else:
             outcome = claimed
         if outcome is not claimed:
-            reply = safe_reply(outcome, run.amount_sent, dep_locale)
+            reply = safe_reply(outcome, shown, dep_locale)
         elif outcome is Outcome.OUT_OF_SCOPE and text_weight(reply) > self._limits.max_out_of_scope_reply_chars:
             # A long off-topic reply means the model answered the question: not our job.
             run.log.add("out_of_scope_reply_replaced", str(len(reply)))
@@ -438,14 +478,14 @@ class MakerAgent:
         reply = check_reply(
             reply,
             outcome=outcome,
-            amount_sent=run.amount_sent,
+            amount_sent=shown,
             guidance=run.ctx.policy.guidance,
             max_chars=self._limits.max_reply_chars,
             log=run.log,
             locale=dep_locale,
         )
         summary = check_reply(
-            summary, outcome=outcome, amount_sent=run.amount_sent, guidance="", max_chars=300, log=run.log,
+            summary, outcome=outcome, amount_sent=shown, guidance="", max_chars=300, log=run.log,
             locale=guard_locale,
         )
         record = DecisionRecord(

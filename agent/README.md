@@ -231,7 +231,7 @@ firewall, no DB credentials in the agent's environment).
 | Platform | Zero trust: platform text in a prompt (guidance, names, history purposes, verified guardian answers, events, engine reasons, and the maker's reasoning shown to the Auditor) is capped, stripped and escaped like user input; inline fields are collapsed to one line | `guardrails/input.py` (`PlatformText`), `maker/context.py` |
 | Platform | A trusted channel that needed fixing (hidden characters, oversized, markup), or a proof whose bytes don't match its declared size, adds `platform_text_anomaly` and **forces an Auditor review** | `guardrails/input.py`, `maker/context.py` |
 | Tools | Allowlisted tools per mode; strict Pydantic arguments (`extra="forbid"`, so no recipient can be added); display amounts with max 2 decimals converted to integer base units | `guardrails/tools.py`, `contracts.py` |
-| Tools | Pre-checks before any API call: frozen, blocked category, per-request max, weekly budget, reservoir, **an amount stated in `amount_requested`** (never guessed from the chat), not more than requested, proof threshold, allowance ceiling (1.5× usual) | `guardrails/tools.py` |
+| Tools | Pre-checks before any API call: frozen, blocked category, per-request max, weekly budget, reservoir, **an amount stated in `amount_requested`** (never guessed from the chat), not more than requested (counting pending money), proof threshold, allowance ceiling (the signed amount: lowering is fine, raising needs the guardian). A signed guardian approval (`guardian_approved_amount`) lets exactly that amount past the per-request max and weekly cap without review, like the engine; nothing else is lifted | `guardrails/tools.py` |
 | Proofs | A proof counts toward the threshold only if it belongs to this request, its bytes match the platform's hash, it is an image or platform-extracted (`ocr`) text, and it isn't a duplicate or AI-generated (with `AGENT_CAMERA_ONLY_PROOFS`, it must also be a verified in-app capture). Above the threshold the model must report `proof_findings` (merchant, date, total, receipt number, matches claim); a mismatch or a total below the amount is refused. Platform flags (near-duplicate, screenshot, old, edited, AI-suspected, re-photographed screen) force an Auditor review | `maker/context.py`, `guardrails/tools.py` |
 | Tools | Per-run limits: 1 transfer, 1 guardian question, 10 tool calls, 8 model turns | `config.py` |
 | Tools | Idempotency key derived by code from request state (`req:{id}:{thread length}`, `allowance:{dep}:{iso week}`), never chosen by the model | `maker/agent.py` |
@@ -240,7 +240,7 @@ firewall, no DB credentials in the agent's environment).
 | Output | Reply to the dependent is replaced, in the dependent's language, if it leaks the guardian's guidance (7 English words or 10 Chinese characters in a row), a wallet address or anything that looks like a secret; capped in length at a word or clause break | `guardrails/output.py` |
 | Output | The model's claimed outcome is reconciled with what actually happened (e.g. "sent" with no transfer becomes "declined", "out_of_scope" after asking the guardian becomes "asked_guardian"), and the reply is replaced when corrected | `guardrails/output.py` |
 | Scope | Off-topic messages ("what is 1+1?", homework, chat) end as `out_of_scope` with a short redirect; a reply over 200 (Han characters count 3) means the model answered the question, so it is replaced. Unclear requests end as `asked_dependent`. Three or more off-topic messages in a week are flagged in the guardian's summary | `maker/prompts.py`, `maker/agent.py`, `flows/scheduled.py` |
-| Run | Model outage, refusal, `max_tokens`, missing `finish`, loop limit or exhausted family token budget all end in a **safe fallback**: no further money moves and the guardian is asked | `maker/agent.py`, `guardrails/budget.py` |
+| Run | Model outage, refusal, `max_tokens`, missing `finish`, loop limit, exhausted family token budget or the **run deadline** (150 s; each model call gets the time left) all end in a **safe fallback**: no further money moves and the guardian is asked. A transfer the platform accepted but hasn't confirmed ends as `transfer_pending`, never "declined" | `maker/agent.py`, `guardrails/budget.py`, `llm.py` |
 
 The engine, signer and chain remain the authoritative limits. These guardrails make the
 agent fail early, safely and explainably.
@@ -302,6 +302,13 @@ The engine must refuse a transfer that needs review (`auditor.triggers.trusted_t
 unless it carries an unused `agree` verdict bound to the same idempotency key, amount and
 category. `mock_platform/app.py` implements this as a reference.
 
+Money the engine has accepted but the chain hasn't confirmed is `pending`: the transfer
+result says so (`status: "pending"`), the request carries it as `already_pending`, and it
+counts against `amount_requested` exactly like `already_sent`, because it may still go
+out. Only the engine finishes a pending transfer, by its own idempotency key. A request
+the guardian approved by signature carries `guardian_approved_amount`. What the gateway
+needs to change for these: [gateway-handoff.md](gateway-handoff.md).
+
 Responses must stay within the contract, or the agent fails closed (`PlatformAPIError`,
 so `502` to the gateway, and no model call):
 
@@ -354,4 +361,5 @@ command in it is also a test (`pytest tests/test_walkthrough.py`).
 Optional settings: `AGENT_MAKER_MODEL`, `AGENT_AUDITOR_MODEL` (both default to
 `claude-opus-5-5`), `AGENT_MAKER_EFFORT`, `AGENT_AUDITOR_EFFORT`, `AGENT_SCHEDULER=0`,
 `AGENT_CAMERA_ONLY_PROOFS=1` (only verified in-app captures count as proof; turn on with
-the engine's matching rule once the app's camera flow ships).
+the engine's matching rule once the app's camera flow ships), `AGENT_MAX_RUN_SECONDS`
+(default 150; keep it below the gateway's 180 s timeout).

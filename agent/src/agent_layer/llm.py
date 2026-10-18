@@ -23,6 +23,10 @@ class LLMUnavailable(RuntimeError):
     """The model could not be reached or returned an unusable response."""
 
 
+class RunDeadline(LLMUnavailable):
+    """The run's time budget is spent: treated like an unavailable model (safe fallback)."""
+
+
 @dataclass
 class LLMResponse:
     content: list[Any]
@@ -40,9 +44,13 @@ class ParsedResponse[P: BaseModel]:
 class LLM(Protocol):
     model: str
 
-    def create(self, *, system: str, messages: list[dict], tools: list[dict]) -> LLMResponse: ...
+    def create(
+        self, *, system: str, messages: list[dict], tools: list[dict], timeout: float | None = None
+    ) -> LLMResponse: ...
 
-    def parse(self, *, system: str, messages: list[dict], output_format: type[T]) -> ParsedResponse[T]: ...
+    def parse(
+        self, *, system: str, messages: list[dict], output_format: type[T], timeout: float | None = None
+    ) -> ParsedResponse[T]: ...
 
 
 class AnthropicLLM:
@@ -80,16 +88,29 @@ class AnthropicLLM:
             output_tokens=resp.usage.output_tokens,
         )
 
-    def create(self, *, system: str, messages: list[dict], tools: list[dict]) -> LLMResponse:
+    def _client_for(self, timeout: float | None) -> anthropic.Anthropic:
+        """With a deadline, one retry and half the time left per attempt, so retries can't
+        overrun it; otherwise the SDK defaults."""
+        if timeout is None:
+            return self._client
+        return self._client.with_options(timeout=timeout / 2, max_retries=1)
+
+    def create(
+        self, *, system: str, messages: list[dict], tools: list[dict], timeout: float | None = None
+    ) -> LLMResponse:
         try:
-            resp = self._client.beta.messages.create(messages=messages, tools=tools, **self._common(system))
+            resp = self._client_for(timeout).beta.messages.create(
+                messages=messages, tools=tools, **self._common(system)
+            )
         except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
             raise LLMUnavailable(str(exc)) from exc
         return self._wrap(resp)
 
-    def parse(self, *, system: str, messages: list[dict], output_format: type[T]) -> ParsedResponse[T]:
+    def parse(
+        self, *, system: str, messages: list[dict], output_format: type[T], timeout: float | None = None
+    ) -> ParsedResponse[T]:
         try:
-            resp = self._client.beta.messages.parse(
+            resp = self._client_for(timeout).beta.messages.parse(
                 messages=messages, output_format=output_format, **self._common(system)
             )
         except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:

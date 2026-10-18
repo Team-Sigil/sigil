@@ -263,7 +263,13 @@ def prepare_request_input(
     facts = (
         f"Amount requested: {to_display(request.amount_requested) if request.amount_requested else 'not stated'}. "
         f"Already sent for this request: {to_display(request.already_sent)}. "
-        f"Emergency flagged by the app: {'yes' if request.emergency_claimed else 'no'}."
+        + (f"Pending (accepted, not yet confirmed, may still go out): {to_display(request.already_pending)}. "
+           if request.already_pending else "")
+        + (f"The guardian approved exactly {to_display(request.guardian_approved_amount)} for this request by "
+           "wallet signature: you may send that amount even above the per-request maximum or the weekly "
+           "budget. "
+           if request.guardian_approved_amount else "")
+        + f"Emergency flagged by the app: {'yes' if request.emergency_claimed else 'no'}."
     )
     note = (
         f"\nNote from the app's input filter: possible manipulation signals ({', '.join(unique_signals)}). "

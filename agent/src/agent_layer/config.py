@@ -45,6 +45,9 @@ class Limits:
     # Only verified in-app captures (source "photo"), and text read from them, count as
     # proof. Turn on once the app's camera flow ships; the engine must use the same rule.
     camera_only_proofs: bool = False
+    # Wall-clock limit for one run, below the gateway's 180 s timeout. Each model call gets
+    # the time left as its timeout; when it runs out, the run ends in a safe fallback.
+    max_run_seconds: float = 150.0
     # Fraction of the weekly cap used as the review threshold when the guardian set none.
     default_review_fraction: float = 0.25
 
@@ -68,6 +71,7 @@ class Settings:
             max_loop_turns=_env_int("AGENT_MAX_LOOP_TURNS", Limits.max_loop_turns),
             max_message_chars=_env_int("AGENT_MAX_MESSAGE_CHARS", Limits.max_message_chars),
             camera_only_proofs=_env_bool("AGENT_CAMERA_ONLY_PROOFS", Limits.camera_only_proofs),
+            max_run_seconds=float(os.environ.get("AGENT_MAX_RUN_SECONDS") or Limits.max_run_seconds),
         )
         return cls(
             platform_base_url=os.environ["PLATFORM_API_URL"],

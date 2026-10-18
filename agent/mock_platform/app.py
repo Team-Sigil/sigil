@@ -123,6 +123,9 @@ class MockPlatform:
             self.used_proofs: set[tuple[str, str]] = set()
             # The engine's side of AGENT_CAMERA_ONLY_PROOFS: both must use the same rule.
             self.camera_only_proofs = False
+            # Set False to simulate the signer being down: cleared transfers stay pending.
+            self.signer_available = True
+            self.pending: dict[str, TransferInstruction] = {}
             self.answers: dict[str, list[GuardianAnswer]] = {}
             self.verdicts: dict[str, StoredVerdict] = {}
             self.transfers: dict[str, TransferResult] = {}
@@ -209,6 +212,8 @@ class MockPlatform:
                 prior = self.transfers[t.idempotency_key]
                 if prior.status == "sent":
                     return prior.model_copy(update={"status": "duplicate"})
+                if prior.status == "pending":
+                    return self._settle(t.idempotency_key)  # retry: the signer is idempotent on the key
                 return prior
 
             def block(reason: str) -> TransferResult:
@@ -232,16 +237,31 @@ class MockPlatform:
                 return block("frozen by guardian")
             if t.category in d.policy.blocked_categories:
                 return block("blocked category")
-            if t.amount > d.policy.max_per_request:
+            request = self.requests.get(t.request_id) if t.request_id else None
+            # A signed guardian approval for exactly this amount lifts the per-request max,
+            # the weekly cap and review; nothing else. (A real engine re-verifies the
+            # signature; the mock trusts the request field it stands in for.)
+            override = request is not None and request.guardian_approved_amount == t.amount
+            if t.trigger == "allowance":
+                if d.policy.allowance is None:
+                    return block("no allowance in policy")
+                if t.amount > d.policy.allowance.amount:
+                    return block("over allowance")
+            elif not override and t.amount > d.policy.max_per_request:
                 return block("over max per request")
-            if t.amount > ctx.budget.remaining_this_week:
+            if not override and t.amount > ctx.budget.remaining_this_week:
                 return block("over weekly cap")
             if t.amount > ctx.delegated_amount:
                 return block("insufficient delegation")
-            request = self.requests.get(t.request_id) if t.request_id else None
-            if t.trigger == "request" and request is None:
-                return block("unknown request")
-            needs_review = trusted_triggers(
+            if t.trigger == "request":
+                if request is None:
+                    return block("unknown request")
+                if request.amount_requested is None:
+                    return block("no amount requested")
+                # Pending money may still go out, so it counts against the requested amount.
+                if t.amount > request.amount_requested - request.already_sent - request.already_pending:
+                    return block("over requested amount")
+            needs_review = [] if override else trusted_triggers(
                 amount=t.amount,
                 category=t.category,
                 policy=d.policy,
@@ -288,22 +308,47 @@ class MockPlatform:
 
             for pr in proofs:  # in the same step as the transfer: a proof backs one transfer
                 self.used_proofs.update(self._proof_keys(d.guardian_id, pr, t.proof_findings))
+            # Cleared: reserve the money, then ask the signer.
             d.spent_this_week += t.amount
             self.delegated[d.guardian_id] -= t.amount
-            d.history.append(
-                HistoryItem(at=self._now(), kind="transfer", amount=t.amount, category=t.category, purpose=t.purpose)
-            )
             if request:
-                self.requests[request.id] = request.model_copy(update={"already_sent": request.already_sent + t.amount})
-            self.sent.append(t)
-            result = TransferResult(
-                status="sent",
-                decision_id=self._next("dec"),
-                amount=t.amount,
-                tx_signature=f"devnet_tx_{len(self.sent)}",
+                self.requests[request.id] = request.model_copy(
+                    update={"already_pending": request.already_pending + t.amount}
+                )
+            self.pending[t.idempotency_key] = t
+            self.transfers[t.idempotency_key] = TransferResult(
+                status="pending", decision_id=self._next("dec"), amount=t.amount
             )
-            self.transfers[t.idempotency_key] = result
-            return result
+            return self._settle(t.idempotency_key)
+
+    def _settle(self, key: str) -> TransferResult:
+        """Send a cleared transfer. While the signer is down it stays pending, with its
+        reservation and its share of the requested amount held; a retry finishes it."""
+        prior = self.transfers[key]
+        if not self.signer_available:
+            return prior
+        t = self.pending.pop(key)
+        d = self.dependents[t.dependent_id]
+        d.history.append(
+            HistoryItem(at=self._now(), kind="transfer", amount=t.amount, category=t.category, purpose=t.purpose)
+        )
+        request = self.requests.get(t.request_id) if t.request_id else None
+        if request:
+            self.requests[request.id] = request.model_copy(update={
+                "already_pending": request.already_pending - t.amount,
+                "already_sent": request.already_sent + t.amount,
+            })
+        self.sent.append(t)
+        result = TransferResult(
+            status="sent", decision_id=prior.decision_id, amount=t.amount, tx_signature=f"devnet_tx_{len(self.sent)}"
+        )
+        self.transfers[key] = result
+        return result
+
+    def retry_pending(self) -> list[TransferResult]:
+        """What the real engine's retry job does: finish every pending transfer by its own key."""
+        with self.lock:
+            return [self._settle(key) for key in list(self.pending)]
 
     def _now(self) -> datetime:
         return datetime.combine(self.today, datetime.min.time(), tzinfo=UTC) + timedelta(hours=12)

@@ -215,8 +215,9 @@ def test_allowance_mode_ceiling_and_category():
     assert guard.precheck_transfer(_args(30, "allowance")) == T(30)
     with pytest.raises(ToolRejected):
         guard.precheck_transfer(_args(5, "food"))
-    with pytest.raises(ToolRejected, match="at most 45.00"):
-        guard.precheck_transfer(_args(46, "allowance"))
+    assert guard.precheck_transfer(_args(20, "allowance")) == T(20)  # lowering is fine
+    with pytest.raises(ToolRejected, match="can't be more than the signed 30.00"):
+        guard.precheck_transfer(_args(31, "allowance"))
 
 
 def test_admit_rejects_unknown_tool_invalid_args_and_call_flood():

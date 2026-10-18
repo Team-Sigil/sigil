@@ -150,6 +150,11 @@ _TEXTS: dict[str, dict[Locale, str]] = {
         "zh-Hans": "这笔超出了你家长设定的限额，所以不能转。",
         "zh-Hant": "這筆超出了你家長設定的限額，所以不能轉。",
     },
+    "reply.transfer_pending": {
+        "en": "Your {amount} is on its way. It isn't confirmed yet, so it may take a little while.",
+        "zh-Hans": "你的 {amount} 正在转账中，还没有确认，可能需要等一会儿。",
+        "zh-Hant": "你的 {amount} 正在轉帳中，還沒有確認，可能需要等一會兒。",
+    },
     "reply.safe_fallback": {
         "en": "I couldn't finish looking at this, so I've passed it to your guardian.",
         "zh-Hans": "我没能处理完这个请求，已经转给你的家长了。",

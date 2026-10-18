@@ -165,7 +165,8 @@ def test_maker_cannot_skip_review_engine_requires_verdict(platform, base_url, ad
 
 
 def test_verdict_cannot_be_reused_for_a_different_amount(platform, make_agent, add_request, base_url):
-    add_request(amount=30, proofs=[ProofRef(id="p1", media_type="text/plain")])
+    # Asks for 70, so 35 more is within the requested amount and only the verdict can stop it.
+    add_request(amount=70, proofs=[ProofRef(id="p1", media_type="text/plain")])
     platform.add_proof(Proof(id="p1", media_type="text/plain", size_bytes=10, text="calc 30.00", source="ocr"))
     agent, *_ = make_agent([reply(transfer(30, proof=findings(30))), reply(finish("sent_full"))], AGREE)
     agent.handle_request("r1")

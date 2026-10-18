@@ -46,8 +46,9 @@ TOOLS_BY_MODE: dict[Mode, frozenset[str]] = {
     "allowance": frozenset({"request_transfer", "ask_guardian", "notify_guardian", "finish"}),
 }
 
-# An adjusted allowance may not exceed the usual amount by more than this factor.
-MAX_ALLOWANCE_FACTOR = 1.5
+# An allowance may be lowered but never raised: the engine caps it at the signed amount,
+# so raising it needs the guardian.
+MAX_ALLOWANCE_FACTOR = 1.0
 
 
 class ToolRejected(Exception):
@@ -127,17 +128,19 @@ class ToolGuard:
             if amount > ceiling:
                 raise reject(
                     "allowance_ceiling",
-                    f"An adjusted allowance may be at most {to_display(ceiling)}. Ask the guardian for more.",
+                    f"The allowance can't be more than the signed {to_display(ceiling)}. Send that or less, "
+                    "and ask the guardian if you think it should be raised.",
                 )
         elif args.category is Category.ALLOWANCE:
             raise reject("wrong_category", "The allowance category is only for the scheduled allowance.")
-        if amount > policy.max_per_request:
+        override = self.guardian_override(amount)
+        if not override and amount > policy.max_per_request:
             raise reject(
                 "over_max_per_request",
                 f"Above the guardian's per-request maximum of {to_display(policy.max_per_request)}. "
                 "Offer a smaller amount or ask the guardian.",
             )
-        if amount > ctx.budget.remaining_this_week:
+        if not override and amount > ctx.budget.remaining_this_week:
             raise reject(
                 "over_weekly_budget",
                 f"Only {to_display(ctx.budget.remaining_this_week)} is left this week.",
@@ -155,11 +158,15 @@ class ToolGuard:
                     "for and how much (finish with asked_dependent), or finish with out_of_scope if the "
                     "message isn't about money.",
                 )
-            if self.request.already_sent + amount > asked:
+            # Money that is pending (accepted, not yet confirmed) may still go out: count it.
+            committed = self.request.already_sent + self.request.already_pending
+            if committed + amount > asked:
                 raise reject(
                     "over_requested",
                     f"You may not send more than was asked for ({to_display(asked)} total, "
-                    f"{to_display(self.request.already_sent)} already sent).",
+                    f"{to_display(self.request.already_sent)} already sent"
+                    + (f", {to_display(self.request.already_pending)} pending" if self.request.already_pending else "")
+                    + ").",
                 )
             if amount >= policy.proof_threshold:
                 if not self.proof_ids:
@@ -182,6 +189,17 @@ class ToolGuard:
                         f"The proof only covers {to_display(to_base(f.total))}. Send at most that, or ask for proof.",
                     )
         return amount
+
+    def guardian_override(self, amount: int) -> bool:
+        """The guardian signed an approval for exactly this amount on this request.
+
+        Like the engine's override, it lifts only the per-request max, the weekly cap and the
+        Auditor review; freeze, blocked categories, the reservoir, the requested amount and
+        proof still apply. The engine re-verifies the signature, so a wrong field can't move
+        money it wouldn't."""
+        if self.mode != "request" or self.request is None:
+            return False
+        return self.request.guardian_approved_amount == amount
 
     def record_transfer_attempt(self) -> None:
         self.n.transfers += 1
