@@ -113,7 +113,7 @@ loads and verifies the facts and runs the money transaction around it.
 | 7 | Request: amount ≤ `max_per_request`. Allowance: amount ≤ the signed allowance, `request_id` empty, key = `allowance:{dependent}:{ISO week}` | `over max per request` / `over allowance` / `invalid allowance` / `no allowance in policy` |
 | 8 | spent + reserved + amount ≤ `weekly_cap` | `over weekly cap` |
 | 9 | amount ≤ on-chain delegation − reserved; the delegate is the agent wallet **and the token account is owned by the guardian** | `insufficient delegation` |
-| 10 | Request: exists, belongs to the dependent, has an amount, and amount ≤ `amount_requested − already_sent` | `unknown request` / `no amount requested` / `over requested amount` |
+| 10 | Request: exists, belongs to the dependent, has an amount, and amount ≤ `amount_requested − already_sent − pending` (money cleared but not yet confirmed may still go out) | `unknown request` / `no amount requested` / `over requested amount` |
 | 11 | If the review rule fires: an unused `agree` verdict bound to this idempotency key, amount, category and dependent | `auditor verdict required` / `auditor verdict invalid` |
 | 12 | Proofs belong to this request; at or above the proof threshold, an unused image or OCR proof (not typed, not a duplicate) whose findings match and cover the amount | `unknown proof` / `proof not for this request` / `proof required` / `proof already used` / `proof does not cover the transfer` |
 
@@ -141,8 +141,10 @@ it needs the guardian.
    and proof keys are spent, a pending transfer is stored, all in one commit.
 4. The crypto layer is called outside any lock. **Confirmed:** reserved → spent,
    `already_sent` raised, signature stored. **Refused (4xx):** reservation released,
-   `signer failed: <code>`. **Unknown (network, 5xx):** stays pending with the reservation
-   held; a retry finishes it.
+   `signer failed: <code>`. **Unknown (network, 5xx):** returns `status: "pending"`, never
+   `blocked`, and keeps the reservation. A background job retries every pending transfer by
+   its own key at startup and every `PENDING_RETRY_SECONDS`; the crypto layer never signs a
+   key twice.
 
 ## Security controls
 
@@ -164,7 +166,9 @@ it needs the guardian.
 | SEC-19 | Errors use one envelope, never stack traces or upstream details | `core/errors.py`, `agent_client.py` | error tests |
 | SEC-20 | Missing or unverifiable data blocks (default deny) | `engine/checks.py` | per-check tests |
 | — | Reservoir ownership: only spend from a token account owned by the guardian | `engine/transfers.py` | another family's reservoir |
-| — | One receipt backs one transfer (id, hash and receipt fingerprint), across requests | `engine/proofs.py`, `used_proof_keys` | proof reuse tests |
+| — | One receipt backs one transfer (id, hash and receipt fingerprint), across requests and across families (keyed fingerprint) | `engine/proofs.py`, `used_proof_keys`, `receipt_fingerprints` | proof reuse tests |
+| — | A transfer whose outcome is unknown counts against the request, so a new agent run cannot pay it twice | `engine/checks.py`, `engine/transfers.py` | `test_pending_transfer_cannot_be_paid_twice` |
+| — | Proof images are re-encoded before storage: no EXIF, GPS or other metadata reaches the agent | `proof_images.py` | `test_proof_images.py`, `TestNormalisation` |
 | — | A receipt is `photo` only if taken in our genuine iOS app on an App Attest-verified iPhone, unedited, for this request, within its ticket | `capture/` | `test_app_capture.py`, `test_capture_apple.py` |
 
 Attack demos covered as tests: talking the agent into a large transfer (caps and override
@@ -197,7 +201,7 @@ decimals: `12500000` = 12.50). Every route except `/auth/*` needs `Authorization
 | GET | `/capture/devices`; DELETE `/capture/devices/{id}` | member | list; revoke (dependents their own iPhone, guardians any family device) |
 | POST | `/requests/{id}/capture-tickets` | dependent | `{device_id}` → `{ticket, request_id, device_id, expires_at}` |
 | POST | `/requests/{id}/process` | member | → `{request, decision}`; retry after `AGENT_UNAVAILABLE` |
-| GET | `/requests`, `/requests/{id}` | member | list; detail with thread, proofs and decisions (guardian summaries for guardians only) |
+| GET | `/requests`, `/requests/{id}` | member | list; detail with thread, proofs and decisions (each with the `transfer_id` it produced; guardian summaries for guardians only) |
 | GET | `/questions?status=open\|answered` | guardian | the agent's questions |
 | POST | `/questions/{id}/answer` | guardian | `{decision: approve\|deny, amount_units?, note?, nonce, signature_b58}` → `{question, decision}` |
 | POST | `/freeze` | guardian | `{frozen, nonce, signature_b58}` → `{frozen}` |
@@ -211,7 +215,9 @@ decimals: `12500000` = 12.50). Every route except `/auth/*` needs `Authorization
 `reply_to_dependent` to the dependent. `amount_sent` is the source of truth for money;
 outcomes are the agent layer's (`sent_full`, `sent_partial`, `counter_offer`,
 `asked_proof`, `asked_guardian`, `asked_dependent`, `declined`, `out_of_scope`,
-`auditor_flagged`, `blocked`, `safe_fallback`), and new ones may appear.
+`auditor_flagged`, `blocked`, `safe_fallback`, `transfer_pending`), and new ones may appear.
+`transfer_pending` means the money is on its way (the crypto layer had not confirmed it yet):
+show it as "on its way", with no retry button.
 
 **Sign-in.** Get a nonce with `purpose: "login"`, have Phantom `signMessage` the returned
 `message` exactly, send it to `/auth/verify`. A nonce works once, for 5 minutes, for that
@@ -248,9 +254,15 @@ frozen:{true|false}
 nonce:{nonce}
 ```
 
-**Proofs.** JPEG, PNG, WebP or GIF (typed from the bytes, not the `Content-Type`), or plain
-text (stored as the dependent's claim, never as evidence). At most 5 MB and 3 per request.
-Re-uploading an image the family already used is flagged `duplicate`. A plain upload is
+**Proofs.** A JPEG, PNG or WebP image (typed from its bytes, not the `Content-Type`; send
+iPhone photos as JPEG, not HEIC; at least 200 px), or plain text (stored as the dependent's
+claim, never as evidence). Up to 15 MB as uploaded and 3 per request. The gateway applies
+the EXIF rotation, strips all metadata (GPS included) by re-encoding, limits the long edge to
+2,576 px and keeps the stored copy under 3.75 MB; the agent only sees that copy, and the
+original is kept encrypted. Flags set at upload: `duplicate` (same bytes as an earlier family
+proof), `near_duplicate` (perceptually the same picture), `no_camera_metadata`, `screenshot`,
+`old_capture` (taken over 30 days ago), `edited` (editing software in the metadata) and
+`camera_signed` (verified capture). Flags only make the agent more careful. A plain upload is
 `source: "file"`; only a verified in-app capture (below) is `"photo"`.
 
 **Verified in-app capture (iOS).** Follows the agent layer's design (`proof-images.md`,
@@ -291,13 +303,16 @@ streaming); never put it in the URL. Dependents do not receive `question` events
 
 **Errors.** `{"error": {"code": "UPPER_SNAKE", "message": "…"}}`: `UNAUTHORIZED` 401,
 `FORBIDDEN` 403, `NOT_FOUND` 404, `CONFLICT` 409, `VALIDATION_ERROR` / `INVALID_ANSWER` /
-`UNSUPPORTED_PROOF` / `ATTESTATION_FAILED` 422, `PAYLOAD_TOO_LARGE` 413, `RATE_LIMITED` 429, `AGENT_UNAVAILABLE`
+`UNSUPPORTED_PROOF` / `ATTESTATION_FAILED` 422, `PAYLOAD_TOO_LARGE` 413, `RATE_LIMITED` /
+`DAILY_LIMIT_REACHED` 429, `AGENT_UNAVAILABLE`
 502, `INTERNAL_ERROR` 500. Validation errors name fields but never echo input.
 
 **Limits.** JSON bodies ≤ 64 KB, chat messages ≤ 2,000 characters, `RATE_LIMIT_PER_MIN`
-requests per minute per session (or per address before sign-in). Agent runs can take
-minutes: use a client timeout of at least 3 minutes on request, message, proof and answer
-calls.
+requests per minute per session (or per address before sign-in), and
+`DEPENDENT_MESSAGES_PER_DAY` dependent messages (new requests, follow-ups and proofs) per
+family day; past that, `429 DAILY_LIMIT_REACHED` ("try again tomorrow"). Agent runs take up
+to 150 s (the agent's own cap): use a client timeout of at least 3 minutes on request,
+message, proof and answer calls.
 
 ## Platform API (for the agent layer)
 
@@ -326,7 +341,20 @@ stricter):
   week. The agent's "up to 1.5× usual with a review" path is therefore always blocked; a
   raise needs the guardian.
 - **Requested amount** enforced by the engine: never more than `amount_requested −
-  already_sent`.
+  already_sent − pending`.
+- **Pending transfers**: an unknown crypto outcome is `status: "pending"` (never `blocked`);
+  `GET /requests/{id}` reports it as `already_pending`, and a background job finishes it by
+  its own key.
+- **Guardian overrides**: `GET /requests/{id}` reports the latest wallet-verified approval as
+  `guardian_approved_amount`, from the same lookup the engine uses; the engine re-verifies
+  the signature on every transfer.
+- **The Auditor's token** may read `GET /dependents/{id}/context` (read-only), so the Auditor
+  can check context itself; every other route keeps its token rule.
+- **Decisions are linked to transfers** by the gateway (`decisions.transfer_id`: the latest
+  sent or pending transfer for the same request, or the allowance, since the previous
+  decision), so no contract change was needed (fixes gap 3).
+- **Receipts** are normalised at upload and carry integrity flags; a receipt that backed a
+  transfer in any family cannot back another (keyed fingerprint).
 - **Signed policy, registered destination, reservoir ownership and delegate** verified on
   every transfer; reservations and a row lock make parallel transfers safe.
 - **History** includes declines, guardian questions, Auditor flags and off-topic messages
@@ -373,7 +401,7 @@ named as in the agent contract (`amount`, `amount_requested`, `already_sent`).
 | Area | Tables |
 |---|---|
 | Identity and policy | `users`, `families`, `nonces`, `policies` (one active per family, enforced by a partial unique index) |
-| Requests | `requests`, `messages`, `proofs`, `used_proof_keys`, `proof_requests` |
+| Requests | `requests`, `messages`, `proofs` (normalised copy, encrypted original, perceptual hash), `used_proof_keys`, `receipt_fingerprints` (keyed, shared by all families), `proof_requests` |
 | Capture | `capture_devices` (attested phone keys, App Attest counters), `capture_tickets` |
 | Money | `transfers` (one per idempotency key; its id is the agent's `decision_id`), `auditor_verdicts`, `budget_counters` |
 | Guardian and agent | `guardian_questions`, `policy_proposals`, `notifications`, `decisions`, `agent_events`, `llm_usage` |
@@ -472,8 +500,10 @@ uv run pytest
 uv run ruff check . && uv run ruff format --check . && uv run mypy src tests mock_crypto
 ```
 
-Tests under `tests/db/` skip themselves when the test database is unreachable; the
-agent-layer parity and end-to-end tests skip when `../agent-layer` is not checked out.
+Tests under `tests/db/` skip themselves when the test database is unreachable. The
+agent-layer parity and end-to-end tests read the agent layer from `AGENT_LAYER_SRC` (default:
+`../agent-layer/src`); without it they skip locally but **fail when `CI` is set**, so a
+pipeline cannot pass without checking the contract.
 
 ## Configuration
 
@@ -491,23 +521,25 @@ agent-layer parity and end-to-end tests skip when `../agent-layer` is not checke
 | `AUSD_MINT`, `AGENT_WALLET_PUBKEY` | The token mint and the agent wallet (the delegate) |
 | `APPLE_APP_ID`, `APPLE_APP_ATTEST_PRODUCTION` | iOS app identity (`<Team ID>.<bundle id>`) and App Attest environment; iOS capture is off until set |
 | `CAMERA_ONLY_PROOFS` | Only verified captures count as proof; must match the agent layer's `AGENT_CAMERA_ONLY_PROOFS` |
-| `RATE_LIMIT_PER_MIN`, `LLM_TOKEN_BUDGET_PER_FAMILY_PER_DAY` | Limits |
+| `RATE_LIMIT_PER_MIN`, `LLM_TOKEN_BUDGET_PER_FAMILY_PER_DAY`, `DEPENDENT_MESSAGES_PER_DAY` | Limits |
+| `PENDING_RETRY_SECONDS` | How often transfers left pending by a crypto outage are retried (default 60) |
 | `GATEWAY_AGENT_URL`, `GATEWAY_CRYPTO_URL` | docker-compose only: where the gateway container finds the agent and crypto layers |
 
 Dependencies beyond SPEC §3: `pydantic-settings`, `psycopg` 3, `PyJWT`, `cryptography`,
-`base58`, `python-multipart` (proof uploads), `cbor2` (App Attest).
+`base58`, `python-multipart` (proof uploads), `cbor2` (App Attest), `pillow` (proof
+normalisation).
 
 ## Known gaps
 
 1. **One gateway instance.** Rate limits and the SSE event bus are in-process. A second
    instance needs a shared store (Redis, or Postgres `LISTEN/NOTIFY` for events).
-2. **No image normalisation at upload.** Proofs are typed from their bytes and hashed, but
-   not decoded, re-encoded, resized or stripped of EXIF/GPS metadata as the agent layer
-   proposes (`proof-images.md`). No perceptual hashing, so only exact duplicates are
-   flagged.
+2. **No C2PA or AI-image detection.** Content credentials are not read, so `ai_generated`
+   and C2PA-based `camera_signed` are never set (verified App Attest captures do get
+   `camera_signed`); `ai_suspected` and `rephotographed_screen` classifiers are not built.
+   The near-duplicate threshold (8 of 64 dHash bits) is a first guess, open question 6 in
+   `proof-images.md`.
 3. **Verified capture limits.** Claims are signed JSON, not C2PA manifests, and App Attest
-   receipts are not used for Apple's fraud metric. The original signed image is what the
-   agent sees (no normalised copy, see gap 2). Photographing a fake or someone else's
+   receipts are not used for Apple's fraud metric. Photographing a fake or someone else's
    receipt is still possible, as the agent layer's doc explains.
 4. **Agent calls are synchronous.** Request, message, proof and answer calls wait for the
    agent (up to minutes). A job queue would let the app return at once and rely on SSE.
@@ -519,14 +551,30 @@ Dependencies beyond SPEC §3: `pydantic-settings`, `psycopg` 3, `PyJWT`, `crypto
    contract or this README (categories, field names, outcomes, the review rule), those win.
    It was corrected for the mobile client (v1.0.1).
 
+## Agent layer handoff
+
+Status of the agent layer's `gateway-handoff.md` (reviewed at `6810508`):
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Pending transfers can pay twice (P0) | Done: pending counts in check 10, `status: "pending"`, `already_pending`, retry job |
+| 2 | Re-copy the agent contract | Done (`b5e5d25`); parity tests pass |
+| 3 | Expose signed guardian overrides | Done: `guardian_approved_amount` |
+| 4 | Normalise proof images at upload | Done: Pillow re-encode, metadata stripped, 2,576 px, ≤ 3.75 MB, original kept encrypted |
+| 5 | Parity tests skip silently | Done: `AGENT_LAYER_SRC`, fail under `CI` |
+| 6 | More proof integrity flags | Done: `near_duplicate`, `screenshot`, `no_camera_metadata`, `old_capture`, `edited`, cross-family receipt fingerprint. Not done: C2PA (`ai_generated`), classifiers |
+| 7 | Verified in-app capture and camera-only | Done for iOS (App Attest); Android is out of scope |
+| 8 | Daily request quota per dependent | Done: `DEPENDENT_MESSAGES_PER_DAY`, `429 DAILY_LIMIT_REACHED` |
+| 9 | Auditor read access to context | Done: the Auditor's token may read context |
+| 10 | Link decisions to transfers | Done gateway-side: `decisions.transfer_id`, no contract change |
+
 ## Questions for the other layers
 
 - **Han:** is the crypto contract above workable (the `owner` field, 4xx vs 5xx semantics,
   idempotency on the key)? Will the signer read `registered_destinations` or should the
   gateway expose an endpoint for it?
-- **Alwin:** the allowance cap and the requested-amount check are stricter than the mock
-  engine; should the agent's tool guard match (drop the 1.5× allowance path)? Should
-  `guardian_answer` thread messages use a specific wording?
+- **Alwin:** all ten items of `gateway-handoff.md` are addressed (see "Agent layer handoff"
+  below); please re-run your alignment tests against the gateway.
 - **Shine:** SSE needs header-based auth (the token in the `Authorization` header, never the
   URL); agent-backed calls need ≥ 3-minute timeouts; signed texts must match the templates
   byte for byte. For receipts: the App Attest enrolment and the signed capture claim above,
