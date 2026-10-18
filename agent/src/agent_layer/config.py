@@ -25,6 +25,9 @@ class Limits:
     max_transfers_per_run: int = 1
     max_guardian_questions_per_run: int = 1
     max_reply_chars: int = 600
+    # An off-topic reply only needs to redirect; longer means the agent is answering it.
+    # Measured with Han characters counting 3 (about 65 Chinese characters).
+    max_out_of_scope_reply_chars: int = 200
     max_summary_chars: int = 2_500
     # Platform-sourced text that reaches a prompt (zero trust: capped like user input).
     max_guidance_chars: int = 4_000

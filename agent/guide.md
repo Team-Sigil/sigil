@@ -64,8 +64,10 @@ Two AI agents work on each request, and neither can move money by itself:
 
 What this means for your app:
 
-- **Store the amount the dependent asked for** on the request. The agent never sends
-  more than was asked.
+- **Store the amount the dependent asked for** on the request (`amount_requested`). The
+  agent never sends more than was asked, and **sends nothing when no amount is set**: it
+  asks the dependent instead. If the dependent states an amount later in the chat,
+  update `amount_requested`; the agent never takes an amount from the text.
 - **Let dependents attach a receipt, quote or photo.** Amounts at or above the
   guardian's proof threshold are never sent without one. The agent looks at the first
   3 proofs on a request. Each must be JPEG, PNG, WebP, GIF (first frame only) or plain
@@ -173,7 +175,9 @@ A `200` means the agent reached a decision, including "no". Check `outcome` and
 | `asked_proof` | No | The agent wants a receipt, quote or photo | Let the dependent upload it to the platform, then call `process` again |
 | `asked_guardian` | No | The guardian has been asked to decide | Show the reply; the platform notifies you when the guardian answers |
 | `auditor_flagged` | No | The Auditor disagreed with sending; the guardian decides with both agents' views | Same as `asked_guardian` |
+| `asked_dependent` | No | The agent needs to know what the money is for or how much | Show the reply (a question). When the dependent answers, add the message and **set `amount_requested`** on the request, then call `process` again |
 | `declined` | No | The agent said no, with an alternative | Show the reply |
+| `out_of_scope` | No | The message wasn't about the allowance (for example "what is 1+1?"); the reply says what the agent can help with | Show the reply. Consider a per-dependent daily request quota at your gateway: every message runs the AI |
 | `blocked` | No | The engine refused the transfer (an outer limit, the freeze switch or funds) | Show the reply |
 | `safe_fallback` | No further money | The agent stopped before deciding (for example, the model was unavailable or the family's usage budget ran out) and the guardian has been asked | Show the reply; nothing else is needed |
 

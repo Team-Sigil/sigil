@@ -130,6 +130,16 @@ _TEXTS: dict[str, dict[Locale, str]] = {
         "zh-Hans": "这件事已经交给你的家长决定，很快会有回复。",
         "zh-Hant": "這件事已經交給你的家長決定，很快會有回覆。",
     },
+    "reply.asked_dependent": {
+        "en": "Could you tell me what it's for and how much you need?",
+        "zh-Hans": "可以告诉我这笔钱是做什么用的、需要多少吗？",
+        "zh-Hant": "可以告訴我這筆錢是做什麼用的、需要多少嗎？",
+    },
+    "reply.out_of_scope": {
+        "en": "I can only help with your allowance. Ask me when you need money for something.",
+        "zh-Hans": "我只能帮你处理零花钱的事。需要用钱的时候再来找我吧。",
+        "zh-Hant": "我只能幫你處理零用錢的事。需要用錢的時候再來找我吧。",
+    },
     "reply.declined": {
         "en": "I can't send this one. Feel free to ask again with more details.",
         "zh-Hans": "这笔暂时不能给你。可以补充更多细节再问一次。",
@@ -199,6 +209,11 @@ _TEXTS: dict[str, dict[Locale, str]] = {
         "en": "{n} requests on {day}",
         "zh-Hans": "{day}有 {n} 笔请求",
         "zh-Hant": "{day}有 {n} 筆請求",
+    },
+    "flags.out_of_scope": {
+        "en": "{n} messages that weren't about the allowance",
+        "zh-Hans": "{n} 条与零花钱无关的消息",
+        "zh-Hant": "{n} 則與零用錢無關的訊息",
     },
     "flags.refused": {
         "en": "{n} blocked or flagged attempts",

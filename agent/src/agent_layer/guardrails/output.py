@@ -4,7 +4,8 @@
   addresses or anything secret-looking; long replies are capped. A failing reply is
   replaced by a safe template rather than edited.
 * ``reconcile_outcome`` – the model's claimed outcome is replaced by the truth when
-  they disagree (e.g. it says "sent" but the engine blocked the transfer).
+  they disagree (e.g. it says "sent" but the engine blocked the transfer, or
+  "out_of_scope" after asking the guardian).
 """
 
 from __future__ import annotations
@@ -32,6 +33,11 @@ _BREAKS = " 。，！？；、"
 
 def safe_reply(outcome: Outcome, amount: int = 0, locale: Locale = DEFAULT_LOCALE) -> str:
     return t(f"reply.{outcome.value}", locale, amount=to_display(amount))
+
+
+def text_weight(text: str) -> int:
+    """Length with each Han character counted as 3: about one English word each."""
+    return len(text) + 2 * len(_HAN.findall(text))
 
 
 def _ngrams(text: str, n: int) -> set[tuple[str, ...]]:
@@ -117,6 +123,12 @@ def reconcile_outcome(claimed: Outcome, facts: RunFacts, log: GuardrailLog) -> O
         truth = Outcome.DECLINED if not facts.guardian_asked else Outcome.ASKED_GUARDIAN
     elif claimed is Outcome.ASKED_GUARDIAN and not facts.guardian_asked:
         truth = Outcome.ASKED_PROOF if facts.proof_requested else Outcome.DECLINED
+    elif claimed in (Outcome.ASKED_DEPENDENT, Outcome.OUT_OF_SCOPE) and facts.transfer_blocked:
+        truth = Outcome.BLOCKED  # it tried to send money, so it was a money request
+    elif claimed in (Outcome.ASKED_DEPENDENT, Outcome.OUT_OF_SCOPE) and facts.guardian_asked:
+        truth = Outcome.ASKED_GUARDIAN
+    elif claimed in (Outcome.ASKED_DEPENDENT, Outcome.OUT_OF_SCOPE) and facts.proof_requested:
+        truth = Outcome.ASKED_PROOF
     else:
         truth = claimed
     if truth is not claimed:

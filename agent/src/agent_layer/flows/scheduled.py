@@ -35,6 +35,7 @@ PACE_MARGIN = 0.25
 RESERVOIR_MIN_WEEKS = 2.0
 RESERVOIR_TARGET_WEEKS = 4
 LEARNING_MIN_ANSWERS = 5
+OUT_OF_SCOPE_FLAG = 3  # off-topic messages in a week before the guardian is told
 
 
 def week_key(day: date) -> str:
@@ -124,7 +125,7 @@ def reservoir_check(api: MakerAPI, today: date) -> list[str]:
 
 def pattern_flags(items: list[HistoryItem], locale: Locale = "en") -> list[str]:
     flags: list[str] = []
-    requests = [i for i in items if i.category is not Category.ALLOWANCE]
+    requests = [i for i in items if i.category is not Category.ALLOWANCE and i.kind != "out_of_scope"]
     for cat, n in Counter(i.category for i in requests).items():
         if n >= 4:
             flags.append(t("flags.category", locale, n=n, category=category_label(cat, locale)))
@@ -134,6 +135,9 @@ def pattern_flags(items: list[HistoryItem], locale: Locale = "en") -> list[str]:
     refused = sum(1 for i in items if i.kind in ("blocked", "auditor_flagged"))
     if refused >= 2:
         flags.append(t("flags.refused", locale, n=refused))
+    off_topic = sum(1 for i in items if i.kind == "out_of_scope")
+    if off_topic >= OUT_OF_SCOPE_FLAG:
+        flags.append(t("flags.out_of_scope", locale, n=off_topic))
     return flags
 
 

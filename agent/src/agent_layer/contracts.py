@@ -62,7 +62,9 @@ class Outcome(StrEnum):
     COUNTER_OFFER = "counter_offer"
     ASKED_PROOF = "asked_proof"
     ASKED_GUARDIAN = "asked_guardian"
+    ASKED_DEPENDENT = "asked_dependent"  # a clarifying question; nothing else happened
     DECLINED = "declined"
+    OUT_OF_SCOPE = "out_of_scope"  # not about the allowance, e.g. "what is 1+1?"
     # Set by code only, never chosen by the model:
     AUDITOR_FLAGGED = "auditor_flagged"
     BLOCKED = "blocked"
@@ -75,7 +77,9 @@ MODEL_CHOOSABLE_OUTCOMES = {
     Outcome.COUNTER_OFFER,
     Outcome.ASKED_PROOF,
     Outcome.ASKED_GUARDIAN,
+    Outcome.ASKED_DEPENDENT,
     Outcome.DECLINED,
+    Outcome.OUT_OF_SCOPE,
 }
 
 
@@ -109,7 +113,7 @@ class Budget(_Lenient):
 
 class HistoryItem(_Lenient):
     at: datetime
-    kind: Literal["transfer", "declined", "blocked", "asked_guardian", "auditor_flagged"]
+    kind: Literal["transfer", "declined", "blocked", "asked_guardian", "auditor_flagged", "out_of_scope"]
     amount: int = Field(ge=0)
     category: Category
     purpose: str = Field(default="", max_length=MAX_SHORT_TEXT)
@@ -371,7 +375,8 @@ class NotifyGuardianArgs(_Strict):
 
 class FinishArgs(_Strict):
     outcome: Literal[
-        "sent_full", "sent_partial", "counter_offer", "asked_proof", "asked_guardian", "declined"
+        "sent_full", "sent_partial", "counter_offer", "asked_proof", "asked_guardian", "asked_dependent",
+        "declined", "out_of_scope",
     ]
     reply_to_dependent: str = Field(min_length=1, max_length=1_200)
     summary_for_guardian: str = Field(min_length=1, max_length=400)

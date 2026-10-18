@@ -21,6 +21,7 @@ from agent_layer.contracts import (
     GuardianQuestion,
     HistoryItem,
     Notification,
+    Outcome,
     PolicyDraftSubmission,
     PolicyProposal,
     PolicyView,
@@ -346,7 +347,13 @@ class MockPlatform:
         @app.post(base + "/decisions")
         def decisions(body: DecisionRecord, authorization: str = Header("")) -> dict:
             maker_only(authorization)
-            p.decisions.append(body)
+            with p.lock:
+                p.decisions.append(body)
+                # Off-topic messages appear in history so the weekly summary can flag them.
+                # (Other non-money decisions don't yet: see "Known gaps" in the README.)
+                d = p.dependents.get(body.dependent_id)
+                if d is not None and body.outcome is Outcome.OUT_OF_SCOPE:
+                    d.history.append(HistoryItem(at=p._now(), kind="out_of_scope", amount=0, category=Category.OTHER))
             return {"id": p._next("decision")}
 
         @app.post(base + "/events")

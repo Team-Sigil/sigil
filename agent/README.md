@@ -172,7 +172,9 @@ sequenceDiagram
    reads context with its own token.
 2. **History only records money events.** Declines and guardian questions are written
    to `POST /decisions` but never appear in `history`, so the next run can't see them.
-   The real engine should build history from the decision log.
+   The real engine should build history from the decision log. (The mock does this for
+   `out_of_scope` only, as a `kind: "out_of_scope"` item, so the weekly flag can be
+   tested.)
 3. **The decision record doesn't link to the transaction.** `DecisionRecord` lacks the
    engine's `decision_id` and the `tx_signature` that the audit trail needs.
 4. **No guardian answers in threads.** `guardian_answer` messages exist in the contract,
@@ -194,6 +196,8 @@ sequenceDiagram
 - `notify` is narrowed to `notify_guardian`; the dependent's reply goes through `finish`, and pace warnings are code.
 - Pace, reservoir, pattern flags and learning proposals are deterministic code, not model calls.
 - The Auditor also sees the proof, and manipulation signals in the input force a review.
+- Two more outcomes: `asked_dependent` (a clarifying question) and `out_of_scope` (not
+  about the allowance). A request with no stated amount can't move money.
 
 ## Isolation: everything goes through the platform API
 
@@ -222,13 +226,14 @@ firewall, no DB credentials in the agent's environment).
 | Platform | Zero trust: platform text in a prompt (guidance, names, history purposes, verified guardian answers, events, engine reasons, and the maker's reasoning shown to the Auditor) is capped, stripped and escaped like user input; inline fields are collapsed to one line | `guardrails/input.py` (`PlatformText`), `maker/context.py` |
 | Platform | A trusted channel that needed fixing (hidden characters, oversized, markup), or a proof whose bytes don't match its declared size, adds `platform_text_anomaly` and **forces an Auditor review** | `guardrails/input.py`, `maker/context.py` |
 | Tools | Allowlisted tools per mode; strict Pydantic arguments (`extra="forbid"`, so no recipient can be added); display amounts with max 2 decimals converted to integer base units | `guardrails/tools.py`, `contracts.py` |
-| Tools | Pre-checks before any API call: frozen, blocked category, per-request max, weekly budget, reservoir, not more than requested, proof threshold, allowance ceiling (1.5× usual) | `guardrails/tools.py` |
+| Tools | Pre-checks before any API call: frozen, blocked category, per-request max, weekly budget, reservoir, **an amount stated in `amount_requested`** (never guessed from the chat), not more than requested, proof threshold, allowance ceiling (1.5× usual) | `guardrails/tools.py` |
 | Tools | Per-run limits: 1 transfer, 1 guardian question, 10 tool calls, 8 model turns | `config.py` |
 | Tools | Idempotency key derived by code from request state (`req:{id}:{thread length}`, `allowance:{dep}:{iso week}`), never chosen by the model | `maker/agent.py` |
 | Auditor | Required when trusted triggers fire (amount ≥ review threshold, emergency, off-pattern amount, new category, allowance above usual) or agent triggers fire (low category confidence, injection signals) | `auditor/triggers.py` |
 | Auditor | Two phases: an independent view of the raw case **before** reading the maker's reasoning, then a verdict. A "concerned" view cannot flip to "agree". Fails closed: any error means a flag. A flag means no money moves, and the guardian is asked with both views | `auditor/auditor.py` |
 | Output | Reply to the dependent is replaced, in the dependent's language, if it leaks the guardian's guidance (7 English words or 10 Chinese characters in a row), a wallet address or anything that looks like a secret; capped in length at a word or clause break | `guardrails/output.py` |
-| Output | The model's claimed outcome is reconciled with what actually happened (e.g. "sent" with no transfer becomes "declined"), and the reply is replaced when corrected | `guardrails/output.py` |
+| Output | The model's claimed outcome is reconciled with what actually happened (e.g. "sent" with no transfer becomes "declined", "out_of_scope" after asking the guardian becomes "asked_guardian"), and the reply is replaced when corrected | `guardrails/output.py` |
+| Scope | Off-topic messages ("what is 1+1?", homework, chat) end as `out_of_scope` with a short redirect; a reply over 200 (Han characters count 3) means the model answered the question, so it is replaced. Unclear requests end as `asked_dependent`. Three or more off-topic messages in a week are flagged in the guardian's summary | `maker/prompts.py`, `maker/agent.py`, `flows/scheduled.py` |
 | Run | Model outage, refusal, `max_tokens`, missing `finish`, loop limit or exhausted family token budget all end in a **safe fallback**: no further money moves and the guardian is asked | `maker/agent.py`, `guardrails/budget.py` |
 
 The engine, signer and chain remain the authoritative limits. These guardrails make the

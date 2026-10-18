@@ -43,7 +43,7 @@ from agent_layer.guardrails.budget import BudgetExhausted, TokenBudget
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import PlatformText
 from agent_layer.i18n import dependent_locale, guardian_locale, language_instruction, t
-from agent_layer.guardrails.output import RunFacts, check_reply, reconcile_outcome, safe_reply
+from agent_layer.guardrails.output import RunFacts, check_reply, reconcile_outcome, safe_reply, text_weight
 from agent_layer.guardrails.tools import Mode, ToolGuard, ToolRejected
 from agent_layer.llm import LLM, LLMUnavailable
 from agent_layer.maker.context import PreparedInput, context_block, prepare_request_input
@@ -414,6 +414,10 @@ class MakerAgent:
             outcome = claimed
         if outcome is not claimed:
             reply = safe_reply(outcome, run.amount_sent, dep_locale)
+        elif outcome is Outcome.OUT_OF_SCOPE and text_weight(reply) > self._limits.max_out_of_scope_reply_chars:
+            # A long off-topic reply means the model answered the question: not our job.
+            run.log.add("out_of_scope_reply_replaced", str(len(reply)))
+            reply = safe_reply(outcome, locale=dep_locale)
         reply = check_reply(
             reply,
             outcome=outcome,

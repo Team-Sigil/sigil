@@ -143,7 +143,16 @@ class ToolGuard:
             raise reject("over_reservoir", "The reservoir does not have enough funds; ask the guardian for a top-up.")
         if self.request is not None:
             asked = self.request.amount_requested
-            if asked is not None and self.request.already_sent + amount > asked:
+            # The amount must come from the app's structured field, never from the model's
+            # reading of the chat: an unclear or off-topic message can't move money.
+            if asked is None:
+                raise reject(
+                    "no_amount",
+                    "The dependent hasn't stated an amount, so no money can be sent. Ask them what it is "
+                    "for and how much (finish with asked_dependent), or finish with out_of_scope if the "
+                    "message isn't about money.",
+                )
+            if self.request.already_sent + amount > asked:
                 raise reject(
                     "over_requested",
                     f"You may not send more than was asked for ({to_display(asked)} total, "
