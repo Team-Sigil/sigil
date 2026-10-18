@@ -365,34 +365,41 @@ src/gateway/
   views.py          DB rows as agent contract objects (history, proofs)
   db/               models, session, audit_log, migrations
 mock_crypto/        in-memory crypto layer (dev, tests, reference)
+Dockerfile          one image for the gateway, its migrations and the mock crypto layer
 infra/postgres/     role setup for docker-compose
 tests/              unit tests; tests/db/ against PostgreSQL
 ```
 
 ## Running
 
-Requires Python ≥ 3.12, [uv](https://docs.astral.sh/uv/) and Docker.
+Requires Docker. Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/) only for tests and
+local development.
 
 ```bash
 cp .env.example .env              # fill in secrets (see Configuration)
-uv sync --extra dev
-docker compose up -d postgres     # creates sigil_owner, sigil_app, sigil_signer_ro and sigil_test
-set -a; . ./.env; set +a
-uv run alembic upgrade head       # as DATABASE_URL_MIGRATIONS
-
-uv run python -m mock_crypto      # crypto layer mock on :8300 (or point CRYPTO_URL at the real one)
-uv run python -m gateway          # gateway on :8000
+docker compose up -d --build      # postgres, migrations, mock crypto layer, gateway
+curl localhost:8000/healthz       # {"ok": true}
 ```
 
-With the agent layer checked out next to this repo, run its service against the gateway
-(it calls Claude, so it also needs `ANTHROPIC_API_KEY`):
+| Service | Port | What it is |
+|---|---|---|
+| `postgres` | 5432 | Database; creates `sigil_owner`, `sigil_app`, `sigil_signer_ro` and `sigil_test` on first start |
+| `migrate` | — | Runs `alembic upgrade head` as the owner role, then exits. Only this container holds the owner password |
+| `mock-crypto` | 8300 | In-memory crypto layer. Set `GATEWAY_CRYPTO_URL` to use the real one |
+| `gateway` | 8000 | This service, as the least-privileged app role and a non-root user |
+
+The gateway reaches the agent layer at `GATEWAY_AGENT_URL` (default: port 8100 on the host).
+With the agent layer checked out next to this repo, run it against the gateway (it calls
+Claude, so it also needs `ANTHROPIC_API_KEY`):
 
 ```bash
 cd ../agent-layer
-PLATFORM_API_URL=http://127.0.0.1:8000 \
-PLATFORM_MAKER_TOKEN=$PLATFORM_MAKER_TOKEN PLATFORM_AUDITOR_TOKEN=$PLATFORM_AUDITOR_TOKEN \
-AGENT_INBOUND_TOKEN=$AGENT_INBOUND_TOKEN python -m agent_layer   # agent on :8100
+uv venv && uv pip install -e ".[dev]"   # first time only
+env PLATFORM_API_URL=http://127.0.0.1:8000 ANTHROPIC_API_KEY=sk-ant-... \
+    uv run --env-file ../sigil-gateway/.env python -m agent_layer      # agent on :8100
 ```
+
+Reading the gateway's `.env` gives the agent the same maker, Auditor and inbound tokens.
 
 The mock crypto layer starts with no delegations. Stand in for the guardian's Phantom
 `approve` with its admin route:
@@ -404,10 +411,20 @@ curl -X PUT "http://127.0.0.1:8300/mock/delegations/$GUARDIAN_TOKEN_ACCOUNT" \
           \"delegated_amount_units\": 500000000}"
 ```
 
-Tests:
+Without Docker for the gateway itself (any shell):
 
 ```bash
-uv run pytest                     # everything; tests/db/ needs the docker-compose Postgres
+docker compose up -d postgres
+uv sync --extra dev
+uv run --env-file .env alembic upgrade head
+uv run --env-file .env python -m mock_crypto   # :8300
+uv run --env-file .env python -m gateway       # :8000
+```
+
+Tests (need the `postgres` service):
+
+```bash
+uv run pytest
 uv run ruff check . && uv run ruff format --check . && uv run mypy src tests mock_crypto
 ```
 
@@ -429,6 +446,7 @@ agent-layer parity and end-to-end tests skip when `../agent-layer` is not checke
 | `CRYPTO_URL`, `CRYPTO_HMAC_SECRET` | Calling the crypto layer |
 | `AUSD_MINT`, `AGENT_WALLET_PUBKEY` | The token mint and the agent wallet (the delegate) |
 | `RATE_LIMIT_PER_MIN`, `LLM_TOKEN_BUDGET_PER_FAMILY_PER_DAY` | Limits |
+| `GATEWAY_AGENT_URL`, `GATEWAY_CRYPTO_URL` | docker-compose only: where the gateway container finds the agent and crypto layers |
 
 Dependencies beyond SPEC §3: `pydantic-settings`, `psycopg` 3, `PyJWT`, `cryptography`,
 `base58`, `python-multipart` (proof uploads).

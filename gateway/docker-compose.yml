@@ -1,3 +1,7 @@
+# Local stack: PostgreSQL, migrations, the mock crypto layer and the gateway.
+# Values come from .env (see .env.example). Start with: docker compose up -d --build
+# The agent layer runs separately; the gateway reaches it at GATEWAY_AGENT_URL.
+
 services:
   postgres:
     image: postgres:16
@@ -17,6 +21,60 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # One-shot: applies migrations as the owner role, then exits. Only this container ever
+  # holds the owner password; the gateway runs as the least-privileged app role.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL_MIGRATIONS: postgresql+psycopg://sigil_owner:${SIGIL_OWNER_PASSWORD}@postgres:5432/sigil
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Stand-in for the crypto layer until Han's signer is available.
+  mock-crypto:
+    build: .
+    command: ["python", "-m", "mock_crypto"]
+    environment:
+      CRYPTO_HMAC_SECRET: ${CRYPTO_HMAC_SECRET:?set in .env}
+      MOCK_CRYPTO_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:8300:8300"
+
+  gateway:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://sigil_app:${SIGIL_APP_PASSWORD}@postgres:5432/sigil
+      JWT_SECRET: ${JWT_SECRET:?set in .env}
+      JWT_TTL_HOURS: ${JWT_TTL_HOURS:-12}
+      SIWS_DOMAIN: ${SIWS_DOMAIN:?set in .env}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?set in .env}
+      AGENT_URL: ${GATEWAY_AGENT_URL:-http://host.docker.internal:8100}
+      AGENT_INBOUND_TOKEN: ${AGENT_INBOUND_TOKEN:?set in .env}
+      PLATFORM_MAKER_TOKEN: ${PLATFORM_MAKER_TOKEN:?set in .env}
+      PLATFORM_AUDITOR_TOKEN: ${PLATFORM_AUDITOR_TOKEN:?set in .env}
+      CRYPTO_URL: ${GATEWAY_CRYPTO_URL:-http://mock-crypto:8300}
+      CRYPTO_HMAC_SECRET: ${CRYPTO_HMAC_SECRET:?set in .env}
+      AUSD_MINT: ${AUSD_MINT:?set in .env}
+      AGENT_WALLET_PUBKEY: ${AGENT_WALLET_PUBKEY:?set in .env}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-30}
+      LLM_TOKEN_BUDGET_PER_FAMILY_PER_DAY: ${LLM_TOKEN_BUDGET_PER_FAMILY_PER_DAY:-200000}
+    ports:
+      - "127.0.0.1:8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # reach an agent layer running on the host
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mock-crypto:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   pgdata:
