@@ -57,7 +57,7 @@ A guardian (parent, family member) funds a reservoir in their own Phantom wallet
 
 | Layer | Choice |
 |---|---|
-| Mobile app | Native mobile app for iOS and Android (framework chosen by the app owner); receipts taken with the in-app camera and signed with an attested device key (Apple App Attest; Android key attestation + Play Integrity) |
+| Mobile app | Native iOS app (framework chosen by the app owner); receipts taken with the in-app camera and signed with an Apple App Attest device key |
 | Wallet | Phantom mobile, **devnet only** (Phantom testnet mode) |
 | Sign-in | Sign-In With Solana (Phantom `signIn`, fallback `signMessage`), JWT session |
 | Backend API | Python 3.12, FastAPI, Pydantic v2, Uvicorn |
@@ -553,7 +553,7 @@ To change a default: `[SPEC]` PR updating this table.
 
 ## 18. Out of scope
 
-Mainnet, real fiat, KYC, multiple dependents/guardians, push notifications, LINE/Telegram bots, on-chain spending-limit programs, KMS/HSM (mention as production path only).
+Mainnet, real fiat, KYC, multiple dependents/guardians, an Android app, push notifications, LINE/Telegram bots, on-chain spending-limit programs, KMS/HSM (mention as production path only).
 
 ---
 
@@ -583,4 +583,5 @@ Mainnet, real fiat, KYC, multiple dependents/guardians, push notifications, LINE
 | Date | Version | Change |
 |---|---|---|
 | 2026-10-17 | 1.0 | Initial spec from architecture doc |
-| 2026-10-18 | 1.0.1 | The client is a native mobile app (iOS, Android), not a web app: §3 stack, §4 layout and ownership, §18, §19; receipts use verified in-app capture |
+| 2026-10-18 | 1.0.1 | The client is a native mobile app, not a web app: §3 stack, §4 layout and ownership, §18, §19; receipts use verified in-app capture |
+| 2026-10-18 | 1.0.2 | The mobile app is iOS only: §3; Android is out of scope (§18) |
