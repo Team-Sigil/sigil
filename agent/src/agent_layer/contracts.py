@@ -124,6 +124,9 @@ class AgentContext(_Lenient):
     delegated_amount: int = Field(ge=0)
     frozen: bool = False
     history: list[HistoryItem] = Field(default=[], max_length=MAX_ITEMS)
+    # BCP 47 tags from the users' profiles, e.g. "en", "zh-CN", "zh-TW" (see i18n.py).
+    dependent_locale: str | None = Field(default=None, max_length=35)
+    guardian_locale: str | None = Field(default=None, max_length=35)
 
 
 class ThreadMessage(_Lenient):

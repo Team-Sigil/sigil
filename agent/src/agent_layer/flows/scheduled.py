@@ -26,6 +26,7 @@ from agent_layer.guardrails.budget import BudgetExhausted, TokenBudget
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import PlatformText, sanitize, wrap_untrusted
 from agent_layer.guardrails.output import screen_text
+from agent_layer.i18n import LANGUAGE_NAMES, Locale, category_label, dependent_locale, guardian_locale, t, weekday
 from agent_layer.llm import LLM, LLMUnavailable
 from agent_layer.money import to_display
 from agent_layer.platform_api import MakerAPI
@@ -59,10 +60,9 @@ def pace_check(api: MakerAPI, dependent_id: str, today: date) -> bool:
         Notification(
             audience="dependent",
             recipient_id=dependent_id,
-            message=(
-                f"Heads up: you've used {round(spent * 100)}% of this week's budget, and there "
-                f"{'is' if days_left == 1 else 'are'} {days_left} day{'s' if days_left != 1 else ''} to go. "
-                f"{to_display(ctx.budget.remaining_this_week)} is left."
+            message=t(
+                "pace.warning", dependent_locale(ctx), count=days_left,
+                pct=round(spent * 100), days=days_left, left=to_display(ctx.budget.remaining_this_week),
             ),
             dedupe_key=f"pace:{dependent_id}:{ctx.budget.week_start.isoformat()}",
         )
@@ -98,20 +98,20 @@ def reservoir_check(api: MakerAPI, today: date) -> list[str]:
         if weeks_left >= RESERVOIR_MIN_WEEKS:
             continue
         top_up = RESERVOIR_TARGET_WEEKS * burn - delegated
+        locale = guardian_locale(contexts[0])
         api.ask_guardian(
             GuardianQuestion(
                 guardian_id=guardian_id,
                 dependent_id=contexts[0].dependent_id,
                 request_id=None,
-                question=(
-                    f"The allowance reservoir has {to_display(delegated)} left, about "
-                    f"{weeks_left:.1f} weeks at the current pace. Top up by {to_display(top_up)} "
-                    f"to cover {RESERVOIR_TARGET_WEEKS} weeks? (Sign a new approve in Phantom.)"
+                question=t(
+                    "reservoir.question", locale, left=to_display(delegated), weeks=f"{weeks_left:.1f}",
+                    top_up=to_display(top_up), target=RESERVOIR_TARGET_WEEKS,
                 ),
                 recommendation="top_up",
                 recommended_amount=top_up,
                 urgency="high" if weeks_left < 1 else "normal",
-                agent_view=f"Forecast weekly spend {to_display(burn)} across {len(contexts)} dependent(s).",
+                agent_view=t("reservoir.view", locale, burn=to_display(burn), n=len(contexts)),
                 dedupe_key=f"reservoir:{guardian_id}:{week_key(today)}",
             )
         )
@@ -122,18 +122,18 @@ def reservoir_check(api: MakerAPI, today: date) -> list[str]:
 # ------------------------------------------------------------------- patterns
 
 
-def pattern_flags(items: list[HistoryItem]) -> list[str]:
+def pattern_flags(items: list[HistoryItem], locale: Locale = "en") -> list[str]:
     flags: list[str] = []
     requests = [i for i in items if i.category is not Category.ALLOWANCE]
     for cat, n in Counter(i.category for i in requests).items():
         if n >= 4:
-            flags.append(f"{n} requests in the '{cat}' category this week")
+            flags.append(t("flags.category", locale, n=n, category=category_label(cat, locale)))
     for day, n in Counter(i.at.date() for i in requests).items():
         if n >= 4:
-            flags.append(f"{n} requests on {day:%A}")
+            flags.append(t("flags.day", locale, n=n, day=weekday(day.weekday(), locale)))
     refused = sum(1 for i in items if i.kind in ("blocked", "auditor_flagged"))
     if refused >= 2:
-        flags.append(f"{refused} blocked or flagged attempts")
+        flags.append(t("flags.refused", locale, n=refused))
     return flags
 
 
@@ -158,7 +158,8 @@ def weekly_summary(llm: LLM, api: MakerAPI, dependent_id: str, today: date, limi
     limits = limits or Limits()
     ctx = api.get_context(dependent_id)
     activity = api.get_weekly_activity(dependent_id)
-    flags = pattern_flags(activity.items)
+    locale = guardian_locale(ctx)
+    flags = pattern_flags(activity.items, locale)
     log = GuardrailLog()
     name = PlatformText(log).inline(ctx.dependent_name, max_chars=limits.max_name_chars, source="dependent_name")
 
@@ -168,9 +169,9 @@ def weekly_summary(llm: LLM, api: MakerAPI, dependent_id: str, today: date, limi
         lines.append(f"- {i.at:%a}: {i.kind} {to_display(i.amount)} ({i.category}) "
                      + wrap_untrusted("untrusted_purpose", purpose))
     spent = sum(i.amount for i in activity.items if i.kind == "transfer")
-    fallback = (
-        f"{ctx.dependent_name} received {to_display(spent)} of {to_display(activity.weekly_cap)} this week "
-        f"across {sum(1 for i in activity.items if i.kind == 'transfer')} transfer(s)."
+    fallback = t(
+        "summary.fallback", locale, name=ctx.dependent_name, spent=to_display(spent),
+        cap=to_display(activity.weekly_cap), n=sum(1 for i in activity.items if i.kind == "transfer"),
     )
     try:
         budget = TokenBudget(api, ctx.guardian_id, log)
@@ -183,6 +184,7 @@ def weekly_summary(llm: LLM, api: MakerAPI, dependent_id: str, today: date, limi
                     f"Dependent: {name}. Week starting {activity.week_start}. "
                     f"Weekly cap {to_display(activity.weekly_cap)}, spent {to_display(spent)}.\n"
                     + ("\n".join(lines) or "(no activity)")
+                    + f"\nWrite the summary in {LANGUAGE_NAMES[locale]}."
                 ),
             }],
             output_format=SummaryText,
@@ -195,7 +197,7 @@ def weekly_summary(llm: LLM, api: MakerAPI, dependent_id: str, today: date, limi
         written = screen_text(written, guidance="", max_chars=limits.max_summary_chars, log=log)
     text = written or fallback
     if flags:
-        text += "\n\nWorth a look:\n" + "\n".join(f"- {f}" for f in flags)
+        text += f"\n\n{t('summary.worth_a_look', locale)}\n" + "\n".join(f"- {f}" for f in flags)
     api.notify(
         Notification(
             audience="guardian",
@@ -221,11 +223,13 @@ def learning_proposals(api: MakerAPI, guardian_id: str) -> list[PolicyProposal]:
         if len(group) < LEARNING_MIN_ANSWERS or any(a.answer != "approved" for a in group):
             continue
         top = max(a.amount for a in group)
+        locale = guardian_locale(api.get_context(dependent_id))
+        label = category_label(category, locale)
         proposal = PolicyProposal(
             guardian_id=guardian_id,
             dependent_id=dependent_id,
-            change=f"Stop asking you about '{category}' requests up to {to_display(top)}.",
-            evidence=f"You approved all {len(group)} '{category}' requests I asked about (largest {to_display(top)}).",
+            change=t("learn.change", locale, category=label, top=to_display(top)),
+            evidence=t("learn.evidence", locale, n=len(group), category=label, top=to_display(top)),
             dedupe_key=f"learn:{dependent_id}:{category}:{len(group)}",
         )
         api.propose_policy_update(proposal)

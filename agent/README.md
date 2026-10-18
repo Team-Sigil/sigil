@@ -217,7 +217,7 @@ firewall, no DB credentials in the agent's environment).
 |---|---|---|
 | Input | Unicode normalisation, hidden/zero-width characters stripped, length caps, thread and proof caps | `guardrails/input.py`, `maker/context.py` |
 | Input | Dependent text and proofs wrapped in `<untrusted_…>` tags that cannot be closed from inside (HTML-escaped) | `guardrails/input.py` |
-| Input | Injection signals (instruction override, claimed guardian approval, role play, authority claims, urgency, wallet addresses) are shown to the model and **force an Auditor review**; they never block on their own | `guardrails/input.py`, `auditor/triggers.py` |
+| Input | Injection signals in English and Chinese (instruction override, claimed guardian approval, role play, authority claims, urgency, wallet addresses) are shown to the model and **force an Auditor review**; they never block on their own | `guardrails/input.py`, `auditor/triggers.py` |
 | Platform | Responses over 8 MB, invalid JSON or outside the contract (hard length ceilings on every text field and list) raise `PlatformAPIError`: the run fails closed | `platform_api.py`, `contracts.py` |
 | Platform | Zero trust: platform text in a prompt (guidance, names, history purposes, verified guardian answers, events, engine reasons, and the maker's reasoning shown to the Auditor) is capped, stripped and escaped like user input; inline fields are collapsed to one line | `guardrails/input.py` (`PlatformText`), `maker/context.py` |
 | Platform | A trusted channel that needed fixing (hidden characters, oversized, markup), or a proof whose bytes don't match its declared size, adds `platform_text_anomaly` and **forces an Auditor review** | `guardrails/input.py`, `maker/context.py` |
@@ -227,12 +227,33 @@ firewall, no DB credentials in the agent's environment).
 | Tools | Idempotency key derived by code from request state (`req:{id}:{thread length}`, `allowance:{dep}:{iso week}`), never chosen by the model | `maker/agent.py` |
 | Auditor | Required when trusted triggers fire (amount ≥ review threshold, emergency, off-pattern amount, new category, allowance above usual) or agent triggers fire (low category confidence, injection signals) | `auditor/triggers.py` |
 | Auditor | Two phases: an independent view of the raw case **before** reading the maker's reasoning, then a verdict. A "concerned" view cannot flip to "agree". Fails closed: any error means a flag. A flag means no money moves, and the guardian is asked with both views | `auditor/auditor.py` |
-| Output | Reply to the dependent is replaced if it leaks the guardian's guidance (7-word overlap), a wallet address or anything that looks like a secret; capped in length | `guardrails/output.py` |
+| Output | Reply to the dependent is replaced, in the dependent's language, if it leaks the guardian's guidance (7 English words or 10 Chinese characters in a row), a wallet address or anything that looks like a secret; capped in length at a word or clause break | `guardrails/output.py` |
 | Output | The model's claimed outcome is reconciled with what actually happened (e.g. "sent" with no transfer becomes "declined"), and the reply is replaced when corrected | `guardrails/output.py` |
 | Run | Model outage, refusal, `max_tokens`, missing `finish`, loop limit or exhausted family token budget all end in a **safe fallback**: no further money moves and the guardian is asked | `maker/agent.py`, `guardrails/budget.py` |
 
 The engine, signer and chain remain the authoritative limits. These guardrails make the
 agent fail early, safely and explainably.
+
+## Languages
+
+The agent supports English, Simplified Chinese and Traditional Chinese
+([`i18n.py`](src/agent_layer/i18n.py)). Each run tells the model which language to
+write in for each reader, and every fixed text code sends to a person exists in all
+three.
+
+| Reader | Language |
+|---|---|
+| Dependent | The language and script of their latest message; if too short to tell (`"10?"`), their profile locale; otherwise English |
+| Guardian (summaries, questions, notes, Auditor reasons) | Their profile locale; otherwise the language their guidance is written in; otherwise English |
+
+Profile locales come from the platform as optional BCP 47 tags on the context
+(`dependent_locale`, `guardian_locale`: `en`, `zh-CN`, `zh-TW`, `zh-HK`, …).
+Unsupported tags are ignored. Purposes, reasoning and guardrail events stay in whatever
+language the model or code wrote them in; they are not shown to people as-is.
+
+The Chinese fixed texts and injection patterns should be reviewed by a native speaker
+of each script before launch. Adding a language means a column in `i18n.py`, patterns in
+`guardrails/input.py`, and a script rule in `detect_locale`.
 
 ## Layout
 
@@ -241,6 +262,7 @@ src/agent_layer/
   contracts.py      platform API payloads, tool arguments, Auditor outputs
   platform_api.py   MakerAPI / AuditorAPI: the only way out of the agent zone
   llm.py            LLM port + AnthropicLLM (Claude Opus 5.5, adaptive thinking, refusal fallbacks)
+  i18n.py           languages: who gets which, and every fixed text in en / zh-Hans / zh-Hant
   guardrails/       input, tools, output, budget
   maker/            system prompt, tool schemas, context builder, the agent loop
   auditor/          prompts, review triggers, the two-phase Auditor

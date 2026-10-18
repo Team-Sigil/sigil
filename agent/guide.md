@@ -72,6 +72,12 @@ What this means for your app:
   text, and at most 5 MB; anything else is skipped. Limit uploads to 3 in your app, so
   that no proof is silently ignored. See [proof-images.md](proof-images.md) for planned
   upload rules.
+- **Any of English, Simplified or Traditional Chinese works.** The agent replies to the
+  dependent in the language and script of their latest message, and writes guardian
+  summaries and questions in the guardian's language. Set `dependent_locale` and
+  `guardian_locale` on the platform's user profiles (BCP 47, e.g. `en`, `zh-CN`,
+  `zh-TW`); they are used when a message is too short to tell, and for scheduled
+  messages.
 - **Keep messages short.** The agent reads the first 2,000 characters of each
   dependent message and the last 20 messages of a conversation.
 - **Pass the dependent's words through unchanged.** Don't add text such as "approved

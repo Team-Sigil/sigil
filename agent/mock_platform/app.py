@@ -50,6 +50,8 @@ class DependentState:
     spent_this_week: int = 0
     frozen: bool = False
     history: list[HistoryItem] = field(default_factory=list)
+    dependent_locale: str | None = None
+    guardian_locale: str | None = None
 
 
 @dataclass
@@ -123,6 +125,8 @@ class MockPlatform:
             delegated_amount=self.delegated.get(d.guardian_id, 0),
             frozen=d.frozen,
             history=d.history,
+            dependent_locale=d.dependent_locale,
+            guardian_locale=d.guardian_locale,
         )
 
     # ----------------------------------------------------------------- engine

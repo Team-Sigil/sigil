@@ -30,6 +30,10 @@ Rules that always hold:
 - Code checks every tool call. If a call is rejected, read the reason and pick another
   move; do not retry the same call.
 - Amounts are in tokens with at most 2 decimals, e.g. 12.50.
+- Dependents and guardians may write in English or Chinese (Simplified or Traditional).
+  Write each text in the language the run's context names for its reader, and use the
+  same script (Simplified or Traditional) they do. Tool arguments other than messages
+  to people (purpose, reasoning) may be in any language.
 - Larger or unusual transfers are reviewed by an independent Auditor before they go
   out; if it flags one, the guardian decides and you tell the dependent so.
 
@@ -42,4 +46,5 @@ usual amount is {usual}. You may adjust it (for example a little less after an
 overspent week) but explain why. Call request_transfer with category "allowance", then
 finish with a short note to the dependent. If no allowance should be sent, explain why
 in finish with outcome "declined".
+{languages}
 """

@@ -23,6 +23,7 @@ from agent_layer.contracts import (
 from agent_layer.guardrails.budget import BudgetExhausted, TokenBudget
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import PlatformText, wrap_untrusted
+from agent_layer.i18n import LANGUAGE_NAMES, guardian_locale
 from agent_layer.llm import LLM, LLMUnavailable
 from agent_layer.maker.context import dependent_name, guidance_block, history_lines
 from agent_layer.money import to_display
@@ -79,7 +80,9 @@ class Auditor:
             f"Weekly cap {to_display(p.weekly_cap)}, spent this week "
             f"{to_display(ctx.budget.spent_this_week)}, left {to_display(ctx.budget.remaining_this_week)}.\n"
             f"Recent history:\n{history_lines(ctx, limits, pt)}\n\n"
-            f"The request:\n{case.case_text}\n\nProof:\n{proofs}\n\n{PHASE1_INSTRUCTION}"
+            f"The request:\n{case.case_text}\n\nProof:\n{proofs}\n\n{PHASE1_INSTRUCTION}\n"
+            f"Write your notes, reason and concerns in {LANGUAGE_NAMES[guardian_locale(ctx)]}: "
+            "the guardian reads them."
         )
 
     def _decision_message(self, case: ReviewCase, pt: PlatformText) -> str:

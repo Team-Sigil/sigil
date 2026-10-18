@@ -24,21 +24,53 @@ from agent_layer.guardrails.events import GuardrailLog
 _HIDDEN = re.compile(r"[​-‏‪-‮⁠-⁤⁦-⁩﻿­]")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
-_SIGNALS: dict[str, re.Pattern[str]] = {
-    "instruction_override": re.compile(
-        r"\b(ignore|disregard|forget|override)\b.{0,40}\b(instruction|rule|prompt|polic|limit|guidance)",
-        re.I | re.S,
-    ),
-    "role_play": re.compile(r"\b(you are now|act as|pretend (to be|you)|developer mode|jailbreak)\b", re.I),
-    "system_prompt_probe": re.compile(r"\b(system prompt|your (instructions|rules|guidance)|reveal|print the)\b", re.I),
-    "claimed_guardian_approval": re.compile(
-        r"\b(mom|mum|dad|mother|father|parent|guardian|grandma|grandpa)\b.{0,40}"
-        r"\b(said|says|approved|agreed|allowed|ok(ay)?|fine|let me)\b",
-        re.I | re.S,
-    ),
-    "authority_claim": re.compile(r"\b(admin|administrator|developer|anthropic|system)\s*(:|says|here|message)", re.I),
-    "urgency_pressure": re.compile(r"\b(emergency|urgent(ly)?|right now|immediately|asap|hospital|police|stranded)\b", re.I),
-    "address_like": re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b"),
+# A base58 run the length of a Solana address. Lookarounds instead of \b, because \b
+# sees no boundary between a Han character and a letter ("发到9xQe…").
+ADDRESS_LIKE = re.compile(r"(?<![1-9A-HJ-NP-Za-km-z])[1-9A-HJ-NP-Za-km-z]{32,44}(?![1-9A-HJ-NP-Za-km-z])")
+
+# English and Chinese (Simplified and Traditional) patterns per signal. Chinese text is
+# matched after NFKC, so full-width ":" and digits are already ASCII.
+_SIGNALS: dict[str, list[re.Pattern[str]]] = {
+    "instruction_override": [
+        re.compile(
+            r"\b(ignore|disregard|forget|override)\b.{0,40}\b(instruction|rule|prompt|polic|limit|guidance)",
+            re.I | re.S,
+        ),
+        re.compile(
+            r"(忽略|忽視|无视|無視|忘记|忘記|不要理|别管|別管|跳过|跳過|绕过|繞過).{0,20}"
+            r"(指令|指示|规则|規則|提示|设定|設定|限制|限额|限額|政策|要求|规定|規定)",
+            re.S,
+        ),
+    ],
+    "role_play": [
+        re.compile(r"\b(you are now|act as|pretend (to be|you)|developer mode|jailbreak)\b", re.I),
+        re.compile(r"(你现在是|你現在是|你扮演|扮演一个|扮演一個|假装你|假裝你|开发者模式|開發者模式|越狱|越獄)"),
+    ],
+    "system_prompt_probe": [
+        re.compile(r"\b(system prompt|your (instructions|rules|guidance)|reveal|print the)\b", re.I),
+        re.compile(r"(系统提示|系統提示|提示词|提示詞|你的(指令|指示|规则|規則|设定|設定)|透露|泄露|洩露)"),
+    ],
+    "claimed_guardian_approval": [
+        re.compile(
+            r"\b(mom|mum|dad|mother|father|parent|guardian|grandma|grandpa)\b.{0,40}"
+            r"\b(said|says|approved|agreed|allowed|ok(ay)?|fine|let me)\b",
+            re.I | re.S,
+        ),
+        re.compile(
+            r"(妈妈|媽媽|我妈|我媽|爸爸|我爸|父母|家长|家長|监护人|監護人|奶奶|爷爷|爺爺|外婆|外公|阿嬷|阿嬤).{0,20}"
+            r"(说|說|同意|批准|答应|答應|允许|允許|可以|没问题|沒問題|准了|准许|准許|行了)",
+            re.S,
+        ),
+    ],
+    "authority_claim": [
+        re.compile(r"\b(admin|administrator|developer|anthropic|system)\s*(:|says|here|message)", re.I),
+        re.compile(r"(管理员|管理員|开发者|開發者|开发人员|開發人員|系统|系統|官方)\s*(:|说|說|消息|訊息|通知)"),
+    ],
+    "urgency_pressure": [
+        re.compile(r"\b(emergency|urgent(ly)?|right now|immediately|asap|hospital|police|stranded)\b", re.I),
+        re.compile(r"(紧急|緊急|急需|急用|立刻|立即|赶快|趕快|医院|醫院|警察|被困|出事)"),
+    ],
+    "address_like": [ADDRESS_LIKE],
 }
 
 EMERGENCY_SIGNAL = "urgency_pressure"
@@ -67,7 +99,7 @@ def sanitize(raw: str, *, max_chars: int, log: GuardrailLog | None = None, sourc
         text = text[:max_chars]
         if log:
             log.add("input_truncated", f"{source} > {max_chars} chars")
-    signals.extend(name for name, pat in _SIGNALS.items() if pat.search(text))
+    signals.extend(name for name, pats in _SIGNALS.items() if any(p.search(text) for p in pats))
     if log and signals:
         log.add("injection_signals", f"{source}: {','.join(signals)}")
     return SanitizedText(text=text, signals=signals, truncated=truncated)

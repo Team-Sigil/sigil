@@ -42,6 +42,7 @@ from agent_layer.contracts import (
 from agent_layer.guardrails.budget import BudgetExhausted, TokenBudget
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import PlatformText
+from agent_layer.i18n import dependent_locale, guardian_locale, language_instruction, t
 from agent_layer.guardrails.output import RunFacts, check_reply, reconcile_outcome, safe_reply
 from agent_layer.guardrails.tools import Mode, ToolGuard, ToolRejected
 from agent_layer.llm import LLM, LLMUnavailable
@@ -116,11 +117,17 @@ class MakerAgent:
         log = GuardrailLog()
         usual = to_display(ctx.policy.allowance.amount) if ctx.policy.allowance else "not set"
         pt = PlatformText(log)
-        text = f"{context_block(ctx, self._limits, pt)}\n\n{ALLOWANCE_INSTRUCTION.format(usual=usual)}"
+        dep_locale, guard_locale = dependent_locale(ctx), guardian_locale(ctx)
+        instruction = ALLOWANCE_INSTRUCTION.format(
+            usual=usual, languages=language_instruction(dep_locale, guard_locale)
+        )
+        text = f"{context_block(ctx, self._limits, pt)}\n\n{instruction}"
         prepared = PreparedInput(
             content=[{"type": "text", "text": text}],
             case_text=f"Scheduled weekly allowance (usual amount {usual}).",
             signals=pt.signals,
+            dependent_locale=dep_locale,
+            guardian_locale=guard_locale,
         )
         run = self._new_run(
             ctx, "allowance", None, prepared, idempotency_key=f"allowance:{dependent_id}:{period_key}", log=log
@@ -308,9 +315,9 @@ class MakerAgent:
                         guardian_id=run.ctx.guardian_id,
                         dependent_id=run.ctx.dependent_id,
                         request_id=run.request_id,
-                        question=(
-                            f"Send {to_display(amount)} to {run.ctx.dependent_name} for {args.purpose}? "
-                            "The agent said yes; the Auditor disagreed."
+                        question=t(
+                            "guardian.flagged", run.prepared.guardian_locale,
+                            amount=to_display(amount), name=run.ctx.dependent_name, purpose=args.purpose,
                         ),
                         recommendation="approve",
                         recommended_amount=amount,
@@ -371,9 +378,9 @@ class MakerAgent:
                     guardian_id=run.ctx.guardian_id,
                     dependent_id=run.ctx.dependent_id,
                     request_id=run.request_id,
-                    question=f"I couldn't finish reviewing a request from {run.ctx.dependent_name}. Please decide.",
+                    question=t("guardian.fallback", run.prepared.guardian_locale, name=run.ctx.dependent_name),
                     recommendation="unsure",
-                    agent_view="The agent hit a safety stop before reaching a decision.",
+                    agent_view=t("guardian.fallback_view", run.prepared.guardian_locale),
                     dedupe_key=f"fallback:{run.idempotency_key}",
                 )
             )
@@ -390,9 +397,11 @@ class MakerAgent:
             guardian_asked=run.guardian_asked,
             requested_amount=run.request.amount_requested if run.request else None,
         )
+        dep_locale, guard_locale = run.prepared.dependent_locale, run.prepared.guardian_locale
         if run.finish is None:
             claimed = Outcome.SAFE_FALLBACK
-            reply, summary = safe_reply(Outcome.SAFE_FALLBACK), "The agent stopped safely before deciding."
+            reply = safe_reply(Outcome.SAFE_FALLBACK, locale=dep_locale)
+            summary = t("guardian.stopped_summary", guard_locale)
         else:
             claimed = Outcome(run.finish.outcome)
             reply, summary = run.finish.reply_to_dependent, run.finish.summary_for_guardian
@@ -404,7 +413,7 @@ class MakerAgent:
         else:
             outcome = claimed
         if outcome is not claimed:
-            reply = safe_reply(outcome, run.amount_sent)
+            reply = safe_reply(outcome, run.amount_sent, dep_locale)
         reply = check_reply(
             reply,
             outcome=outcome,
@@ -412,9 +421,11 @@ class MakerAgent:
             guidance=run.ctx.policy.guidance,
             max_chars=self._limits.max_reply_chars,
             log=run.log,
+            locale=dep_locale,
         )
         summary = check_reply(
-            summary, outcome=outcome, amount_sent=run.amount_sent, guidance="", max_chars=300, log=run.log
+            summary, outcome=outcome, amount_sent=run.amount_sent, guidance="", max_chars=300, log=run.log,
+            locale=guard_locale,
         )
         record = DecisionRecord(
             dependent_id=run.ctx.dependent_id,

@@ -37,6 +37,9 @@ conversation, draft a policy:
 
 Only use what the guardian actually said; where a limit was not given, choose a
 conservative value and list it under open questions.
+
+Write the guidance, test scenarios and open questions in the language the guardian
+writes in (English or Chinese, keeping their Simplified or Traditional script).
 """
 
 

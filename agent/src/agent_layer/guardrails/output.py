@@ -14,30 +14,24 @@ from dataclasses import dataclass
 
 from agent_layer.contracts import Outcome
 from agent_layer.guardrails.events import GuardrailLog
+from agent_layer.guardrails.input import ADDRESS_LIKE
+from agent_layer.i18n import DEFAULT_LOCALE, Locale, t
 from agent_layer.money import to_display
 
-_ADDRESS = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
-_SECRET = re.compile(r"(sk-ant-[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bseed phrase\b)", re.I)
+_SECRET = re.compile(r"(sk-ant-[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bseed phrase\b|助记词|助記詞)", re.I)
 _WORD = re.compile(r"[a-z0-9']+")
+_HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 # A run of this many consecutive guidance words appearing in a reply counts as a leak.
 LEAK_NGRAM = 7
-
-SAFE_REPLY = {
-    Outcome.SENT_FULL: "Done! I've sent {amount}.",
-    Outcome.SENT_PARTIAL: "I've sent {amount} for now.",
-    Outcome.COUNTER_OFFER: "I can't do the full amount right now, but let's find something that works.",
-    Outcome.ASKED_PROOF: "Could you share a receipt or quote for this?",
-    Outcome.ASKED_GUARDIAN: "I've asked your guardian about this and will get back to you.",
-    Outcome.AUDITOR_FLAGGED: "I've passed this to your guardian to decide. You'll hear back soon.",
-    Outcome.DECLINED: "I can't send this one. Feel free to ask again with more details.",
-    Outcome.BLOCKED: "I can't send this because it's outside the limits your guardian set.",
-    Outcome.SAFE_FALLBACK: "I couldn't finish looking at this, so I've passed it to your guardian.",
-}
+# For Chinese, a run of this many consecutive Han characters (punctuation ignored).
+LEAK_HAN_NGRAM = 10
+# Where a capped reply may be cut, so it ends at a word or clause.
+_BREAKS = " 。，！？；、"
 
 
-def safe_reply(outcome: Outcome, amount: int = 0) -> str:
-    return SAFE_REPLY[outcome].format(amount=to_display(amount))
+def safe_reply(outcome: Outcome, amount: int = 0, locale: Locale = DEFAULT_LOCALE) -> str:
+    return t(f"reply.{outcome.value}", locale, amount=to_display(amount))
 
 
 def _ngrams(text: str, n: int) -> set[tuple[str, ...]]:
@@ -45,22 +39,37 @@ def _ngrams(text: str, n: int) -> set[tuple[str, ...]]:
     return {tuple(words[i : i + n]) for i in range(len(words) - n + 1)}
 
 
+def _han_ngrams(text: str, n: int) -> set[str]:
+    han = "".join(_HAN.findall(text))
+    return {han[i : i + n] for i in range(len(han) - n + 1)}
+
+
+def _leaks(text: str, guidance: str) -> bool:
+    return bool(
+        _ngrams(text, LEAK_NGRAM) & _ngrams(guidance, LEAK_NGRAM)
+        or _han_ngrams(text, LEAK_HAN_NGRAM) & _han_ngrams(guidance, LEAK_HAN_NGRAM)
+    )
+
+
 def screen_text(text: str, *, guidance: str, max_chars: int, log: GuardrailLog) -> str | None:
     """Return the text (capped to ``max_chars``), or None if it must not be shown."""
     problems: list[str] = []
-    if _ADDRESS.search(text):
+    if ADDRESS_LIKE.search(text):
         problems.append("address")
     if _SECRET.search(text):
         problems.append("secret")
-    if guidance and _ngrams(text, LEAK_NGRAM) & _ngrams(guidance, LEAK_NGRAM):
+    if guidance and _leaks(text, guidance):
         problems.append("guidance_leak")
     if problems:
         log.add("reply_replaced", ",".join(problems))
         return None
     if len(text) > max_chars:
         log.add("reply_truncated", str(len(text)))
-        cut = text[:max_chars].rsplit(" ", 1)[0]
-        return cut.rstrip(" ,;:") + "…"
+        cut = text[:max_chars]
+        at = max(cut.rfind(c) for c in _BREAKS)
+        if at >= max_chars * 0.7:  # don't throw away a long tail to find a break
+            cut = cut[:at]
+        return cut.rstrip(" ,;:，；：、") + "…"
     return text
 
 
@@ -72,9 +81,10 @@ def check_reply(
     guidance: str,
     max_chars: int,
     log: GuardrailLog,
+    locale: Locale = DEFAULT_LOCALE,
 ) -> str:
     screened = screen_text(reply, guidance=guidance, max_chars=max_chars, log=log)
-    return screened if screened is not None else safe_reply(outcome, amount_sent)
+    return screened if screened is not None else safe_reply(outcome, amount_sent, locale)
 
 
 @dataclass(frozen=True)

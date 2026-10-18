@@ -18,6 +18,7 @@ from agent_layer.config import Limits
 from agent_layer.contracts import AgentContext, DependentRequest, Proof
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import PLATFORM_ANOMALY_SIGNAL, PlatformText, sanitize, wrap_untrusted
+from agent_layer.i18n import Locale, dependent_locale, guardian_locale, language_instruction
 from agent_layer.money import to_display
 
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
@@ -31,6 +32,8 @@ class PreparedInput:
     proof_texts: list[str] = field(default_factory=list)
     proof_images: list[dict] = field(default_factory=list)
     signals: list[str] = field(default_factory=list)
+    dependent_locale: Locale = "en"
+    guardian_locale: Locale = "en"
 
 
 def dependent_name(ctx: AgentContext, limits: Limits, pt: PlatformText) -> str:
@@ -161,6 +164,7 @@ def prepare_request_input(
 
     text_block = context_block(ctx, limits, pt)
     unique_signals = sorted(set(signals + pt.signals))
+    dep_locale, guard_locale = dependent_locale(ctx, request), guardian_locale(ctx)
     facts = (
         f"Amount requested: {to_display(request.amount_requested) if request.amount_requested else 'not stated'}. "
         f"Already sent for this request: {to_display(request.already_sent)}. "
@@ -178,7 +182,7 @@ def prepare_request_input(
         f"{wrap_untrusted('untrusted_dependent_message', first.text)}\n"
         + (f"Conversation since then:\n" + "\n".join(thread_lines) + "\n" if thread_lines else "")
         + (f"Proof:\n{proof_section}\n" if proof_section else "")
-        + f"{facts}{note}"
+        + f"{facts}{note}\n{language_instruction(dep_locale, guard_locale)}"
     )
     return PreparedInput(
         content=[*images, {"type": "text", "text": text}],
@@ -186,4 +190,6 @@ def prepare_request_input(
         proof_texts=texts,
         proof_images=images,
         signals=unique_signals,
+        dependent_locale=dep_locale,
+        guardian_locale=guard_locale,
     )
