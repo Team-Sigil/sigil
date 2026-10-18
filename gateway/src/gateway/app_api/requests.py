@@ -8,6 +8,7 @@ app can retry with `POST /requests/{id}/process`.
 import hashlib
 from datetime import UTC, datetime
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,6 +20,7 @@ from gateway.app_api.sessions import FamilyDependentDep, Member, MemberDep
 from gateway.capture.config import CaptureConfig
 from gateway.capture.service import verify_capture
 from gateway.contracts.app import Units
+from gateway.core.config import Settings
 from gateway.core.errors import ConflictError, DomainError, NotFoundError
 from gateway.db import audit_log
 from gateway.db.models import Decision, Message, Proof
@@ -47,6 +49,35 @@ class UnsupportedProofError(DomainError):
     message = "Proofs must be a JPEG, PNG, WebP or GIF image, or plain text."
 
 
+class DailyLimitError(DomainError):
+    code = "DAILY_LIMIT_REACHED"
+    status = 429
+    message = "You've reached today's message limit. Try again tomorrow."
+
+
+async def enforce_daily_limit(session: AsyncSession, member: Member, limit: int) -> None:
+    """Every dependent message runs the agent, so each dependent gets a daily allowance of them
+    (agent layer handoff item 8). The day is the family's calendar day."""
+    zone = ZoneInfo(member.family.timezone)
+    local_midnight = datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+    sent_today = await session.scalar(
+        select(func.count(Message.id))
+        .join(RequestRow, RequestRow.id == Message.request_id)
+        .where(
+            RequestRow.family_id == member.family.id,
+            Message.role == ThreadRole.DEPENDENT,
+            Message.created_at >= local_midnight,
+        )
+    )
+    if (sent_today or 0) >= limit:
+        raise DailyLimitError()
+
+
+def _daily_limit(request: Request) -> int:
+    settings: Settings = request.app.state.settings
+    return settings.dependent_messages_per_day
+
+
 class NewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -67,6 +98,7 @@ class DecisionView(BaseModel):
     outcome: str
     reply_to_dependent: str
     amount_sent: int
+    transfer_id: str | None = None  # the transfer this run produced, if any
     summary_for_guardian: str | None = None  # guardians only
     created_at: datetime | None = None
 
@@ -181,6 +213,7 @@ def sniff_image(data: bytes) -> str | None:
 async def create_request(
     body: NewRequest, dependent: FamilyDependentDep, request: Request, session: SessionDep
 ) -> ProcessedRequest:
+    await enforce_daily_limit(session, dependent, _daily_limit(request))
     row = RequestRow(
         family_id=dependent.family.id,
         message=body.message,
@@ -208,6 +241,7 @@ async def add_message(
     session: SessionDep,
 ) -> ProcessedRequest:
     row = await family_request(session, dependent, request_id)
+    await enforce_daily_limit(session, dependent, _daily_limit(request))
     if body.amount_requested is not None:
         if body.amount_requested < row.already_sent:
             raise ConflictError("The amount cannot be below what was already sent.")
@@ -242,6 +276,7 @@ async def upload_proof(
     capture_signature: Annotated[str | None, Form(max_length=4_000)] = None,
 ) -> UploadedProof:
     row = await family_request(session, dependent, request_id)
+    await enforce_daily_limit(session, dependent, _daily_limit(request))
     count = await session.scalar(select(func.count()).where(Proof.request_id == row.id))
     if (count or 0) >= MAX_PROOFS_PER_REQUEST:
         raise ConflictError("A request can have at most 3 proofs.")
@@ -339,6 +374,7 @@ async def get_request(request_id: str, member: MemberDep, session: SessionDep) -
                 outcome=d.outcome,
                 reply_to_dependent=d.reply_to_dependent,
                 amount_sent=d.amount_sent,
+                transfer_id=str(d.transfer_id) if d.transfer_id else None,
                 summary_for_guardian=d.summary_for_guardian if is_guardian else None,
                 created_at=d.created_at,
             )

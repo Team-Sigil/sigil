@@ -37,5 +37,13 @@ def require_auditor(request: Request, authorization: str = Header(default="")) -
         raise HTTPException(status_code=403, detail="Auditor credential required.")
 
 
+def require_agent(request: Request, authorization: str = Header(default="")) -> None:
+    """Either credential: for read-only routes the Auditor needs too (its own context read, so
+    a compromised maker cannot hand it a doctored snapshot)."""
+    if _caller(request, authorization) is None:
+        raise HTTPException(status_code=401, detail="Invalid or missing token.")
+
+
 MakerDep = Annotated[None, Depends(require_maker)]
+AgentDep = Annotated[None, Depends(require_agent)]
 AuditorDep = Annotated[None, Depends(require_auditor)]

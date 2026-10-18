@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     pending_retry_seconds: int = Field(default=60, gt=0)
 
     rate_limit_per_min: int = Field(default=30, gt=0)
+    # Each dependent message (new request, follow-up or proof) runs the agent.
+    dependent_messages_per_day: int = Field(default=50, gt=0)
     llm_token_budget_per_family_per_day: int = Field(default=200_000, ge=0)
 
     @model_validator(mode="after")

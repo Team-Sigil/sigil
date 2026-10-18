@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from gateway.agent_api import service
-from gateway.agent_api.auth import AuditorDep, MakerDep
+from gateway.agent_api.auth import AgentDep, AuditorDep, MakerDep
 from gateway.contracts import agent
 from gateway.contracts.crypto import CryptoClient
 from gateway.core.config import Settings
@@ -59,7 +59,7 @@ async def list_dependents(_: MakerDep, session: SessionDep) -> list[agent.Depend
 @router.get("/dependents/{dependent_id}/context")
 async def get_context(
     dependent_id: str,
-    _: MakerDep,
+    _: AgentDep,
     session: SessionDep,
     crypto: CryptoDep,
     settings: SettingsDep,

@@ -6,12 +6,13 @@ dependent by the dependent's user id.
 """
 
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -54,6 +55,8 @@ from gateway.enums import (
     QuestionStatus,
     Role,
     ThreadRole,
+    TransferStatus,
+    TransferTrigger,
     Verdict,
 )
 from gateway.events import EventBus, EventType
@@ -467,11 +470,43 @@ async def notify(session: AsyncSession, note: agent.Notification, bus: EventBus)
     return agent.Receipt(id=str(row.id))
 
 
+async def _run_transfer(
+    session: AsyncSession, family: Family, request: Request | None
+) -> uuid.UUID | None:
+    """The transfer the run being recorded produced: the latest sent or pending transfer for
+    the same request (or the family's allowance) since the previous decision on it."""
+    same_subject = (
+        Transfer.request_id == request.id
+        if request is not None
+        else (Transfer.request_id.is_(None)) & (Transfer.trigger == TransferTrigger.ALLOWANCE)
+    )
+    previous = await session.scalar(
+        select(func.max(Decision.created_at)).where(
+            Decision.family_id == family.id,
+            Decision.request_id == request.id
+            if request is not None
+            else Decision.request_id.is_(None),
+        )
+    )
+    conditions = [
+        Transfer.family_id == family.id,
+        same_subject,
+        Transfer.status.in_([TransferStatus.SENT, TransferStatus.PENDING]),
+    ]
+    if previous is not None:
+        conditions.append(Transfer.created_at > previous)
+    transfer_id: uuid.UUID | None = await session.scalar(
+        select(Transfer.id).where(*conditions).order_by(Transfer.created_at.desc()).limit(1)
+    )
+    return transfer_id
+
+
 async def record_decision(
     session: AsyncSession, record: agent.DecisionRecord, bus: EventBus
 ) -> agent.Receipt:
     members = await members_by_dependent(session, record.dependent_id)
     request = await _family_request(session, members.family, record.request_id)
+    transfer_id = await _run_transfer(session, members.family, request)
     decision = Decision(
         family_id=members.family.id,
         request_id=request.id if request else None,
@@ -481,6 +516,7 @@ async def record_decision(
         amount_sent=record.amount_sent,
         policy_version=record.policy_version,
         guardrail_events=record.guardrail_events,
+        transfer_id=transfer_id,
     )
     session.add(decision)
     if request is not None:
@@ -497,6 +533,7 @@ async def record_decision(
             "decision_id": str(decision.id),
             "outcome": record.outcome.value,
             "amount_sent": record.amount_sent,
+            "transfer_id": str(transfer_id) if transfer_id else None,
         },
     )
     await session.commit()

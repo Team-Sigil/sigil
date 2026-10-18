@@ -7,11 +7,13 @@ from nacl.signing import SigningKey
 from sqlalchemy import select, text
 
 from gateway.contracts.signing import answer_question_message, freeze_message
+from gateway.core.config import Settings
 from gateway.db.models import GuardianQuestion, Proof
 from gateway.enums import GuardianDecision
+from gateway.main import create_app
 from tests.db.test_app_auth import login, sign
 from tests.db.test_app_families_policy import TestFamilies, nonce
-from tests.db.world import AUSD, World
+from tests.db.world import AGENT_WALLET, AUSD, MINT, World
 
 JPEG = b"\xff\xd8\xff\xe0" + b"receipt-bytes" * 10
 PNG = b"\x89PNG\r\n\x1a\n" + b"png-bytes" * 10
@@ -52,6 +54,7 @@ class TestRequests:
             "outcome": "asked_dependent",
             "reply_to_dependent": "What is it for?",
             "amount_sent": 0,
+            "transfer_id": None,
             "summary_for_guardian": None,
             "created_at": None,
         }
@@ -333,3 +336,30 @@ class TestFreeze:
     ) -> None:
         response = await self.freeze(app_client, world, True, key=SigningKey.generate())
         assert response.status_code == 401
+
+
+async def test_dependent_daily_message_limit(world: World) -> None:
+    """Agent handoff item 8: each message runs the agent, so a dependent gets a daily quota."""
+    settings = Settings(
+        agent_wallet_pubkey=AGENT_WALLET, ausd_mint=MINT, dependent_messages_per_day=2
+    )
+    app = create_app(
+        settings=settings, sessionmaker=world.sessionmaker, crypto=world.crypto, agent=world.agent
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+    ) as client:
+        headers = await login(client, world.dependent_key)
+        request_id = (await new_request(client, headers))["request"]["id"]
+        second = await client.post(
+            f"/api/v1/requests/{request_id}/messages",
+            headers=headers,
+            json={"message": "for school"},
+        )
+        assert second.status_code == 200
+        third = await client.post(
+            "/api/v1/requests", headers=headers, json={"message": "and lunch"}
+        )
+        assert third.status_code == 429
+        assert third.json()["error"]["code"] == "DAILY_LIMIT_REACHED"
+        assert len(world.agent.processed) == 2  # the refused message never reached the agent

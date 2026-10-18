@@ -479,6 +479,8 @@ class Decision(Base):
     amount_sent: Mapped[int] = mapped_column(BigInteger)
     policy_version: Mapped[int | None] = mapped_column(Integer)
     guardrail_events: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
+    # The transfer this run produced, linked by the gateway (agent layer gap 3).
+    transfer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("transfers.id"))
     created_at: Mapped[datetime] = created_at()
 
     __table_args__ = (CheckConstraint("amount_sent >= 0", name="amount_sent_non_negative"),)

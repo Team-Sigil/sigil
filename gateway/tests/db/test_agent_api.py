@@ -4,9 +4,10 @@ from typing import Any
 import httpx
 import pytest
 from nacl.signing import SigningKey
+from sqlalchemy import select
 
 from gateway.contracts import agent
-from gateway.db.models import Message
+from gateway.db.models import Decision, Message
 from gateway.enums import ThreadRole
 from tests.conftest import TEST_ENV
 from tests.db.test_engine_transfers import TestGuardianOverride
@@ -34,6 +35,17 @@ class TestAuth:
 
     async def test_auditor_cannot_use_maker_routes(self, client: httpx.AsyncClient) -> None:
         assert (await client.get("/agent/v1/dependents", headers=AUDITOR)).status_code == 403
+
+    async def test_auditor_can_read_context_only(
+        self, client: httpx.AsyncClient, world: World
+    ) -> None:
+        """Agent handoff item 9: the Auditor reads context itself, read-only."""
+        path = f"/agent/v1/dependents/{world.dependent_id}/context"
+        assert (await client.get(path, headers=AUDITOR)).status_code == 200
+        request = await world.add_request(10 * AUSD)
+        assert (
+            await client.get(f"/agent/v1/requests/{request.id}", headers=AUDITOR)
+        ).status_code == 403
 
     async def test_maker_cannot_post_verdicts(
         self, client: httpx.AsyncClient, world: World
@@ -292,3 +304,36 @@ class TestRequestMoneyState:
         unapproved = (await client.get(f"/agent/v1/requests/{forged.id}", headers=MAKER)).json()
         assert approved["guardian_approved_amount"] == 45 * AUSD
         assert unapproved["guardian_approved_amount"] is None
+
+
+async def test_decision_is_linked_to_its_transfer(client: httpx.AsyncClient, world: World) -> None:
+    """Agent handoff item 10: the audit trail joins a decision to the transfer it produced."""
+    request = await world.add_request(10 * AUSD)
+    body = transfer_body(world, str(request.id))
+    sent = await client.post(
+        "/agent/v1/transfers",
+        headers=MAKER | {"Idempotency-Key": body["idempotency_key"]},
+        json=body,
+    )
+    decision = {
+        "dependent_id": world.dependent_id,
+        "request_id": str(request.id),
+        "outcome": "sent_full",
+        "reply_to_dependent": "Sent!",
+        "summary_for_guardian": "Sent 8.00.",
+        "amount_sent": 8 * AUSD,
+        "policy_version": 1,
+    }
+    await client.post("/agent/v1/decisions", headers=MAKER, json=decision)
+    # A later decision on the same request with no new transfer links to nothing.
+    await client.post(
+        "/agent/v1/decisions",
+        headers=MAKER,
+        json=decision | {"outcome": "declined", "amount_sent": 0},
+    )
+    async with world.sessionmaker() as session:
+        rows = (await session.scalars(select(Decision).order_by(Decision.created_at))).all()
+    assert [str(d.transfer_id) if d.transfer_id else None for d in rows] == [
+        sent.json()["decision_id"],
+        None,
+    ]
