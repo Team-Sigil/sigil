@@ -46,9 +46,11 @@ from gateway.enums import (
     GuardianDecision,
     PolicyStatus,
     QuestionStatus,
+    Role,
     ThreadRole,
     Verdict,
 )
+from gateway.events import EventBus, EventType
 from gateway.views import as_category, load_history, to_agent_proof
 
 logger = logging.getLogger(__name__)
@@ -347,7 +349,9 @@ async def record_verdict(
     return agent.VerdictReceipt(verdict_id=str(verdict.id))
 
 
-async def ask_guardian(session: AsyncSession, q: agent.GuardianQuestion) -> agent.Receipt:
+async def ask_guardian(
+    session: AsyncSession, q: agent.GuardianQuestion, bus: EventBus
+) -> agent.Receipt:
     members = await members_by_both(session, q.guardian_id, q.dependent_id)
     existing = await session.scalar(
         select(GuardianQuestion.id).where(GuardianQuestion.dedupe_key == q.dedupe_key)
@@ -382,6 +386,9 @@ async def ask_guardian(session: AsyncSession, q: agent.GuardianQuestion) -> agen
         session, members.family.id, AuditEvent.QUESTION_ASKED, {"question_id": str(question.id)}
     )
     await session.commit()
+    bus.publish(
+        members.family.id, EventType.QUESTION, {"question_id": str(question.id)}, Role.GUARDIAN
+    )
     return agent.Receipt(id=str(question.id))
 
 
@@ -415,7 +422,7 @@ async def propose_policy_update(
     return agent.Receipt(id=str(row.id))
 
 
-async def notify(session: AsyncSession, note: agent.Notification) -> agent.Receipt:
+async def notify(session: AsyncSession, note: agent.Notification, bus: EventBus) -> agent.Receipt:
     audience = Audience(note.audience)
     if audience == Audience.GUARDIAN:
         members = await members_by_guardian(session, note.recipient_id)
@@ -438,10 +445,18 @@ async def notify(session: AsyncSession, note: agent.Notification) -> agent.Recei
     )
     session.add(row)
     await session.commit()
+    bus.publish(
+        members.family.id,
+        EventType.NOTIFICATION,
+        {"notification_id": str(row.id)},
+        Role.GUARDIAN if audience == Audience.GUARDIAN else Role.DEPENDENT,
+    )
     return agent.Receipt(id=str(row.id))
 
 
-async def record_decision(session: AsyncSession, record: agent.DecisionRecord) -> agent.Receipt:
+async def record_decision(
+    session: AsyncSession, record: agent.DecisionRecord, bus: EventBus
+) -> agent.Receipt:
     members = await members_by_dependent(session, record.dependent_id)
     request = await _family_request(session, members.family, record.request_id)
     decision = Decision(
@@ -472,6 +487,8 @@ async def record_decision(session: AsyncSession, record: agent.DecisionRecord) -
         },
     )
     await session.commit()
+    if request is not None:
+        bus.publish(members.family.id, EventType.MESSAGE, {"request_id": str(request.id)})
     return agent.Receipt(id=str(decision.id))
 
 

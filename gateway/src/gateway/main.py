@@ -10,6 +10,7 @@ from gateway.app_api.auth import router as auth_router
 from gateway.app_api.families import router as families_router
 from gateway.app_api.guardian import router as guardian_router
 from gateway.app_api.policy import router as policy_router
+from gateway.app_api.reads import router as reads_router
 from gateway.app_api.requests import router as requests_router
 from gateway.contracts.crypto import CryptoClient
 from gateway.core.config import Settings, get_settings
@@ -18,6 +19,8 @@ from gateway.core.logging import configure_logging
 from gateway.crypto_client import HttpCryptoClient
 from gateway.db.session import make_sessionmaker
 from gateway.engine.transfers import TransferEngine
+from gateway.events import EventBus
+from gateway.protection import BodyLimitMiddleware, RateLimitMiddleware
 
 
 def create_app(
@@ -55,6 +58,7 @@ def create_app(
     app.state.sessionmaker = sessionmaker
     app.state.crypto = crypto
     app.state.agent = agent
+    app.state.events = EventBus()
     app.state.engine = TransferEngine(
         sessionmaker,
         crypto,
@@ -68,6 +72,10 @@ def create_app(
     app.include_router(policy_router)
     app.include_router(requests_router)
     app.include_router(guardian_router)
+    app.include_router(reads_router)
+    # Added last so they run first: size, then rate, before any route work.
+    app.add_middleware(RateLimitMiddleware, per_minute=settings.rate_limit_per_min)
+    app.add_middleware(BodyLimitMiddleware)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:

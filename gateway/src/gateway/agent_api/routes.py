@@ -13,6 +13,7 @@ from gateway.contracts.crypto import CryptoClient
 from gateway.core.config import Settings
 from gateway.db.session import SessionDep
 from gateway.engine.transfers import TransferEngine
+from gateway.events import EventBus, EventType
 
 router = APIRouter(prefix="/agent/v1", tags=["agent"])
 
@@ -32,7 +33,13 @@ def _engine(request: Request) -> TransferEngine:
     return engine
 
 
+def _bus(request: Request) -> EventBus:
+    bus: EventBus = request.app.state.events
+    return bus
+
+
 SettingsDep = Annotated[Settings, Depends(_settings)]
+BusDep = Annotated[EventBus, Depends(_bus)]
 CryptoDep = Annotated[CryptoClient, Depends(_crypto)]
 EngineDep = Annotated[TransferEngine, Depends(_engine)]
 
@@ -103,18 +110,24 @@ async def submit_transfer(
     body: agent.TransferInstruction,
     _: MakerDep,
     engine: EngineDep,
+    session: SessionDep,
+    bus: BusDep,
     idempotency_key: str = Header(default="", alias="Idempotency-Key"),
 ) -> agent.TransferResult:
     if idempotency_key != body.idempotency_key:
         raise HTTPException(status_code=400, detail="Idempotency-Key header mismatch.")
-    return await engine.submit(body)
+    result = await engine.submit(body)
+    if result.status == "sent":
+        members = await service.members_by_dependent(session, body.dependent_id)
+        bus.publish(members.family.id, EventType.TRANSFER, {"transfer_id": result.decision_id})
+    return result
 
 
 @router.post("/guardian-questions")
 async def ask_guardian(
-    body: agent.GuardianQuestion, _: MakerDep, session: SessionDep
+    body: agent.GuardianQuestion, _: MakerDep, session: SessionDep, bus: BusDep
 ) -> agent.Receipt:
-    return await service.ask_guardian(session, body)
+    return await service.ask_guardian(session, body, bus)
 
 
 @router.post("/proof-requests")
@@ -132,15 +145,17 @@ async def propose_policy_update(
 
 
 @router.post("/notifications")
-async def notify(body: agent.Notification, _: MakerDep, session: SessionDep) -> agent.Receipt:
-    return await service.notify(session, body)
+async def notify(
+    body: agent.Notification, _: MakerDep, session: SessionDep, bus: BusDep
+) -> agent.Receipt:
+    return await service.notify(session, body, bus)
 
 
 @router.post("/decisions")
 async def record_decision(
-    body: agent.DecisionRecord, _: MakerDep, session: SessionDep
+    body: agent.DecisionRecord, _: MakerDep, session: SessionDep, bus: BusDep
 ) -> agent.Receipt:
-    return await service.record_decision(session, body)
+    return await service.record_decision(session, body, bus)
 
 
 @router.post("/events")
