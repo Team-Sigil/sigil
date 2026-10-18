@@ -2,15 +2,12 @@
 
 `agent_layer.platform_api` validates every response against the agent's contract, caps its
 size and fails closed on anything unexpected, so if these calls succeed the agent can run
-against this gateway. Skipped unless the agent layer is checked out next to this repo.
+against this gateway. Needs the agent layer (see tests/agent_layer.py).
 """
 
-import importlib
-import sys
 import threading
 import time
 from collections.abc import Iterator
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -21,11 +18,10 @@ from fastapi import FastAPI
 from gateway.core.config import Settings
 from gateway.db.session import make_sessionmaker
 from gateway.main import create_app
+from tests.agent_layer import import_agent_layer
 from tests.conftest import TEST_ENV
 from tests.db.conftest import APP_URL
 from tests.db.world import AGENT_WALLET, AUSD, MINT, World
-
-AGENT_LAYER_SRC = Path(__file__).resolve().parents[3] / "agent-layer" / "src"
 
 
 class BackgroundServer:
@@ -50,17 +46,11 @@ class BackgroundServer:
 
 
 @pytest.fixture
-def agent_layer() -> Iterator[tuple[ModuleType, ModuleType]]:
-    if not AGENT_LAYER_SRC.is_dir():
-        pytest.skip("agent-layer is not checked out next to this repo")
-    sys.path.insert(0, str(AGENT_LAYER_SRC))
-    try:
-        yield (
-            importlib.import_module("agent_layer.contracts"),
-            importlib.import_module("agent_layer.platform_api"),
-        )
-    finally:
-        sys.path.remove(str(AGENT_LAYER_SRC))
+def agent_layer() -> tuple[ModuleType, ModuleType]:
+    return (
+        import_agent_layer("agent_layer.contracts"),
+        import_agent_layer("agent_layer.platform_api"),
+    )
 
 
 @pytest.fixture

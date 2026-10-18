@@ -1,8 +1,5 @@
-import importlib
 import itertools
-import sys
 from datetime import UTC, datetime
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -10,9 +7,9 @@ import pytest
 
 from gateway.contracts import agent
 from gateway.engine.triggers import review_threshold, trusted_triggers
+from tests.agent_layer import import_agent_layer
 
 AUSD = 1_000_000
-AGENT_LAYER_SRC = Path(__file__).resolve().parents[2] / "agent-layer" / "src"
 
 
 def policy(review: int | None = None, allowance: int | None = 30 * AUSD) -> dict[str, Any]:
@@ -101,14 +98,8 @@ def test_default_review_threshold_is_a_quarter_of_the_cap() -> None:
 def test_engine_and_agent_agree_on_every_case() -> None:
     """A difference would let a manipulated maker skip a review the engine should demand,
     or make the engine block transfers the agent thinks are fine."""
-    if not AGENT_LAYER_SRC.is_dir():
-        pytest.skip("agent-layer is not checked out next to this repo")
-    sys.path.insert(0, str(AGENT_LAYER_SRC))
-    try:
-        their_contracts = importlib.import_module("agent_layer.contracts")
-        their_triggers = importlib.import_module("agent_layer.auditor.triggers")
-    finally:
-        sys.path.remove(str(AGENT_LAYER_SRC))
+    their_contracts = import_agent_layer("agent_layer.contracts")
+    their_triggers = import_agent_layer("agent_layer.auditor.triggers")
 
     for case in GRID:
         ours = run(agent, trusted_triggers, case)

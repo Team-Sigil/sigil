@@ -1,8 +1,5 @@
-import importlib
 import inspect
-import sys
 from enum import Enum
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 from uuid import UUID, uuid4
@@ -21,9 +18,9 @@ from gateway.contracts.signing import (
     register_dependent_message,
 )
 from gateway.enums import GuardianDecision
+from tests.agent_layer import import_agent_layer
 
 AUSD = 1_000_000
-AGENT_LAYER_SRC = Path(__file__).resolve().parents[2] / "agent-layer" / "src"
 
 
 def body(**overrides: Any) -> PolicyBody:
@@ -44,13 +41,7 @@ def body(**overrides: Any) -> PolicyBody:
 
 
 def _agent_layer_contracts() -> ModuleType:
-    if not AGENT_LAYER_SRC.is_dir():
-        pytest.skip("agent-layer is not checked out next to this repo")
-    sys.path.insert(0, str(AGENT_LAYER_SRC))
-    try:
-        return importlib.import_module("agent_layer.contracts")
-    finally:
-        sys.path.remove(str(AGENT_LAYER_SRC))
+    return import_agent_layer("agent_layer.contracts")
 
 
 def _mirrored(module: ModuleType) -> dict[str, type]:
