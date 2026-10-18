@@ -1,0 +1,51 @@
+"""Gateway ↔ crypto layer (Han). Defined here; see README "Crypto layer contract".
+
+`POST /v1/transfer` keeps SPEC §8.5's shapes exactly. `GET /v1/delegation/{token_account}`
+is new: the engine's on-chain delegation check (remaining amount and delegate).
+Every request carries `X-Timestamp`, `X-Nonce` and `X-Signature` (HMAC-SHA256 over
+`{timestamp}.{nonce}.{raw_body}`, empty body for GET).
+"""
+
+from enum import StrEnum
+from typing import Annotated
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class CryptoTransferRequest(BaseModel):
+    """A cleared transfer for the signer. The destination is the family's registered token
+    account, resolved by the engine, never by the agent."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    transfer_id: UUID
+    family_id: UUID
+    amount_units: Annotated[int, Field(strict=True, gt=0)]
+    source_token_account: str = Field(max_length=44)
+    destination_token_account: str = Field(max_length=44)
+    mint: str = Field(max_length=44)
+    idempotency_key: str = Field(max_length=64)
+
+
+class CryptoTransferStatus(StrEnum):
+    CONFIRMED = "confirmed"
+    FAILED = "failed"
+
+
+class CryptoTransferResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: CryptoTransferStatus
+    tx_signature: str | None = Field(default=None, max_length=128)
+    error_code: str | None = Field(default=None, max_length=64)
+
+
+class Delegation(BaseModel):
+    """The SPL delegation on the guardian's token account, read from chain."""
+
+    model_config = ConfigDict(frozen=True)
+
+    token_account: str = Field(max_length=44)
+    delegate: str | None = Field(default=None, max_length=44)
+    delegated_amount_units: Annotated[int, Field(strict=True, ge=0)]

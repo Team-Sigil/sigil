@@ -38,6 +38,9 @@ line-length = 100
 target-version = "py312"
 extend-exclude = ["*.md"]
 
+[tool.ruff.format]
+exclude = ["src/gateway/contracts/agent.py", "src/gateway/money.py"]
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "S", "RUF", "ASYNC", "DTZ", "SIM"]
 ignore = ["S101"]
@@ -45,6 +48,9 @@ ignore = ["S101"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106", "S311"]
 "src/gateway/db/migrations/versions/**" = ["E501"]
+# Verbatim copies from the agent layer; kept byte-identical.
+"src/gateway/contracts/agent.py" = ["E501", "RUF012", "UP037"]
+"src/gateway/money.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
