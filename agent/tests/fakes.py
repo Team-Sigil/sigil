@@ -33,12 +33,20 @@ def finish(outcome: str, reply_text: str = "Okay!", summary: str = "Handled the 
     return tool_use("finish", outcome=outcome, reply_to_dependent=reply_text, summary_for_guardian=summary)
 
 
+def findings(total: float, merchant: str = "Office Mart", *, matches: bool = True,
+             receipt_number: str | None = None, date: str = "2026-10-13") -> dict:
+    return {"merchant": merchant, "date": date, "total": total, "receipt_number": receipt_number,
+            "matches_claim": matches}
+
+
 def transfer(amount: float, category: str = "education", *, confidence: float = 0.95,
-             purpose: str = "school supplies", reasoning: str = "Fits the guidance for school costs.") -> SimpleNamespace:
-    return tool_use(
-        "request_transfer", amount=amount, purpose=purpose, category=category,
-        category_confidence=confidence, reasoning=reasoning,
-    )
+             purpose: str = "school supplies", reasoning: str = "Fits the guidance for school costs.",
+             proof: dict | None = None) -> SimpleNamespace:
+    args = dict(amount=amount, purpose=purpose, category=category, category_confidence=confidence,
+                reasoning=reasoning)
+    if proof is not None:
+        args["proof_findings"] = proof
+    return tool_use("request_transfer", **args)
 
 
 Step = LLMResponse | BaseModel | Exception | Callable[[list[dict]], Any]

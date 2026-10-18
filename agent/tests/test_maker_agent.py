@@ -8,7 +8,7 @@ from agent_layer.config import Limits
 from agent_layer.contracts import Outcome, Proof, ProofRef, ThreadMessage
 from agent_layer.money import to_base
 from tests.conftest import AGREE, FLAG, TODAY
-from tests.fakes import all_text, finish, reply, text, tool_use, transfer, unavailable
+from tests.fakes import all_text, findings, finish, reply, text, tool_use, transfer, unavailable
 
 T = to_base
 
@@ -80,10 +80,11 @@ def test_ask_guardian(platform, make_agent, add_request):
 def test_larger_transfer_goes_through_auditor_and_carries_verdict(platform, make_agent, add_request):
     add_request(amount=30, message="Calculator for maths, receipt attached",
                 proofs=[ProofRef(id="p1", media_type="text/plain")])
-    platform.add_proof(Proof(id="p1", media_type="text/plain", size_bytes=40,
+    platform.add_proof(Proof(id="p1", media_type="text/plain", size_bytes=40, source="ocr",
                              text="Office Mart  Casio fx-991  30.00  2026-10-13"))
     agent, maker, auditor = make_agent(
-        [reply(transfer(30, reasoning="Receipt matches a school calculator.")), reply(finish("sent_full", "Sent!"))],
+        [reply(transfer(30, reasoning="Receipt matches a school calculator.", proof=findings(30))),
+         reply(finish("sent_full", "Sent!"))],
         AGREE,
     )
     record = agent.handle_request("r1")
@@ -102,9 +103,10 @@ def test_larger_transfer_goes_through_auditor_and_carries_verdict(platform, make
 def test_auditor_flag_holds_money_and_asks_guardian_with_both_views(platform, make_agent, add_request):
     add_request(amount=30, message="30 for study materials (an online course)",
                 proofs=[ProofRef(id="p1", media_type="text/plain")])
-    platform.add_proof(Proof(id="p1", media_type="text/plain", size_bytes=30, text="GameStore gems pack 30.00"))
+    platform.add_proof(Proof(id="p1", media_type="text/plain", size_bytes=30, text="GameStore gems pack 30.00",
+                             source="ocr"))
     agent, maker, _ = make_agent(
-        [reply(transfer(30, reasoning="Study materials are fine.")),
+        [reply(transfer(30, reasoning="Study materials are fine.", proof=findings(30, "GameStore"))),
          reply(finish("sent_full", "Sent your study money!"))],
         FLAG,
     )

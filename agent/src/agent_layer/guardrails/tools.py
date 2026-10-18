@@ -8,6 +8,7 @@ purpose: the engine stays authoritative, the agent just fails earlier and explai
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -69,8 +70,10 @@ class ToolGuard:
         *,
         mode: Mode,
         request: DependentRequest | None = None,
+        proof_ids: Sequence[str] = (),
     ):
         self.ctx = ctx
+        self.proof_ids = tuple(proof_ids)  # proofs that passed the integrity checks
         self.limits = limits
         self.log = log
         self.mode = mode
@@ -158,11 +161,26 @@ class ToolGuard:
                     f"You may not send more than was asked for ({to_display(asked)} total, "
                     f"{to_display(self.request.already_sent)} already sent).",
                 )
-            if amount >= policy.proof_threshold and not self.request.proofs:
-                raise reject(
-                    "proof_required",
-                    f"Amounts of {to_display(policy.proof_threshold)} or more need proof. Use ask_for_proof first.",
-                )
+            if amount >= policy.proof_threshold:
+                if not self.proof_ids:
+                    raise reject(
+                        "proof_required",
+                        f"Amounts of {to_display(policy.proof_threshold)} or more need proof that can be used as "
+                        "evidence. Use ask_for_proof first.",
+                    )
+                f = args.proof_findings
+                if f is None:
+                    raise reject("proof_findings_required", "Fill proof_findings from what the proof itself says.")
+                if not f.matches_claim:
+                    raise reject(
+                        "proof_mismatch",
+                        "The proof doesn't match the request, so don't send. Ask for the right receipt or decline.",
+                    )
+                if amount > to_base(f.total):
+                    raise reject(
+                        "proof_total_too_low",
+                        f"The proof only covers {to_display(to_base(f.total))}. Send at most that, or ask for proof.",
+                    )
         return amount
 
     def record_transfer_attempt(self) -> None:

@@ -156,12 +156,37 @@ class DependentRequest(_Lenient):
     proofs: list[ProofRef] = Field(default=[], max_length=50)
 
 
+# Where a proof came from. "photo" means a verified in-app capture (signed on the
+# device); "file" anything else. Typed text is the dependent's own claim, never evidence.
+ProofSource = Literal["photo", "file", "ocr", "typed"]
+# Integrity flags the platform may set at upload (see proof-images.md). Anything else
+# is ignored, so no free text from the platform reaches the prompt this way.
+PROOF_FLAGS_DISQUALIFYING = frozenset({"duplicate", "ai_generated"})  # never counts as proof
+PROOF_FLAGS_POSITIVE = frozenset({"camera_signed"})  # a valid C2PA camera signature: a note only
+PROOF_FLAGS = PROOF_FLAGS_DISQUALIFYING | PROOF_FLAGS_POSITIVE | frozenset({
+    "near_duplicate", "screenshot", "no_camera_metadata", "old_capture", "edited",
+    "ai_suspected", "rephotographed_screen",
+})
+# Flags that force an Auditor review.
+PROOF_FLAGS_CONCERNS = PROOF_FLAGS - PROOF_FLAGS_POSITIVE
+
+
 class Proof(_Lenient):
     id: str
     media_type: str
     size_bytes: int = Field(ge=0)
     data_b64: str | None = Field(default=None, max_length=MAX_PROOF_B64)
     text: str | None = Field(default=None, max_length=MAX_TEXT)
+    # Integrity metadata, set by the platform at upload (see proof-images.md). A proof
+    # without a matching request_id and dependent_id is shown but never counts as proof.
+    request_id: str | None = Field(default=None, max_length=64)
+    dependent_id: str | None = Field(default=None, max_length=64)
+    uploaded_at: datetime | None = None
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    source: ProofSource | None = None
+    # For ``ocr`` text: the id of the image proof it was read from.
+    derived_from: str | None = Field(default=None, max_length=64)
+    flags: list[Annotated[str, Field(max_length=40)]] = Field(default=[], max_length=10)
 
 
 class DependentSummary(_Lenient):
@@ -193,6 +218,16 @@ class PolicyDraftValidation(_Lenient):
 # -------------------------------------------------------------------------- writes
 
 
+class ProofFindingsRecord(_Strict):
+    """``ProofFindings`` as sent to the engine, with the total in base units."""
+
+    merchant: str
+    date: str
+    total: int = Field(ge=0)
+    receipt_number: str | None = None
+    matches_claim: bool
+
+
 class TransferInstruction(_Strict):
     """Sent to the engine. There is deliberately no recipient field: the engine
     resolves the dependent's registered token account itself."""
@@ -208,6 +243,11 @@ class TransferInstruction(_Strict):
     idempotency_key: str
     policy_version: int
     auditor_verdict_id: str | None = None
+    # The proofs this transfer relies on (chosen by code, not the model), and what the
+    # model read from them. The engine requires an unused proof above the threshold and
+    # marks these used when it sends.
+    proof_ids: list[str] = []
+    proof_findings: ProofFindingsRecord | None = None
 
 
 class TransferResult(_Lenient):
@@ -334,12 +374,30 @@ def _display_amount(v: float) -> float:
     return v
 
 
+class ProofFindings(_Strict):
+    """What the proof itself says, read by the model. Not what the dependent claims."""
+
+    merchant: str = Field(min_length=1, max_length=100, description="Shop or seller as printed on the proof.")
+    date: str = Field(min_length=1, max_length=20, description="Date as printed, YYYY-MM-DD if you can.")
+    total: float = Field(description="Total on the proof, in tokens, max 2 decimals.")
+    receipt_number: str | None = Field(default=None, max_length=60, description="Receipt or order number, if printed.")
+    matches_claim: bool = Field(description="True only if merchant, items and total fit what the dependent asked for.")
+
+    @field_validator("total")
+    @classmethod
+    def _total(cls, v: float) -> float:
+        return _display_amount(v)
+
+
 class RequestTransferArgs(_Strict):
     amount: float = Field(description="Amount in tokens, e.g. 12.50. Max 2 decimals.")
     purpose: str = Field(min_length=3, max_length=200)
     category: Category
     category_confidence: float = Field(ge=0, le=1)
     reasoning: str = Field(min_length=10, max_length=1_000)
+    proof_findings: ProofFindings | None = Field(
+        default=None, description="Required at or above the proof threshold: what the attached proof says."
+    )
 
     @field_validator("amount")
     @classmethod

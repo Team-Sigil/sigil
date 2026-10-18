@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import hmac
 import itertools
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -10,6 +14,7 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from agent_layer.auditor.triggers import trusted_triggers
+from agent_layer.contracts import PROOF_FLAGS_DISQUALIFYING
 from agent_layer.contracts import (
     AgentContext,
     AgentEvent,
@@ -26,6 +31,7 @@ from agent_layer.contracts import (
     PolicyProposal,
     PolicyView,
     Proof,
+    ProofFindingsRecord,
     ProofRef,
     ProofRequest,
     ThreadMessage,
@@ -35,6 +41,41 @@ from agent_layer.contracts import (
     VerdictSubmission,
 )
 from agent_layer.money import to_base
+
+def proof_digest(proof: Proof) -> str | None:
+    """SHA-256 of a proof's bytes: the decoded image, or the UTF-8 text."""
+    try:
+        raw = base64.b64decode(proof.data_b64, validate=True) if proof.data_b64 else (proof.text or "").encode()
+    except (binascii.Error, ValueError):
+        return None
+    return hashlib.sha256(raw).hexdigest() if raw else None
+
+
+def counts_as_proof(proof: Proof, *, camera_only: bool = False, origin: Proof | None = None) -> bool:
+    """An image, or text the platform extracted from one; never typed text, a duplicate
+    or an AI-generated image. With ``camera_only``, only a verified in-app capture
+    (``origin`` is the photo an ``ocr`` text was read from)."""
+    if set(proof.flags) & PROOF_FLAGS_DISQUALIFYING or proof.source == "typed":
+        return False
+    is_image = proof.media_type.startswith("image/")
+    if not (is_image or proof.source == "ocr"):
+        return False
+    if not camera_only:
+        return True
+    if is_image:
+        return proof.source == "photo"
+    return (
+        origin is not None and origin.source == "photo" and origin.request_id == proof.request_id
+        and not set(origin.flags) & PROOF_FLAGS_DISQUALIFYING
+    )
+
+
+def receipt_fingerprint(f: ProofFindingsRecord) -> str:
+    """The same receipt read twice gives the same fingerprint, whatever the photo."""
+    def norm(v: str | None) -> str:
+        return re.sub(r"\W+", "", (v or "").casefold())
+    return "|".join([norm(f.merchant), re.sub(r"\D", "", f.date), str(f.total), norm(f.receipt_number)])
+
 
 MAKER_TOKEN = "maker-test-token"
 AUDITOR_TOKEN = "auditor-test-token"
@@ -77,6 +118,11 @@ class MockPlatform:
             self.delegated: dict[str, int] = {}
             self.requests: dict[str, DependentRequest] = {}
             self.proofs: dict[str, Proof] = {}
+            # Proof reuse, per guardian family: proof ids, content hashes and receipt
+            # fingerprints that an earlier transfer already relied on.
+            self.used_proofs: set[tuple[str, str]] = set()
+            # The engine's side of AGENT_CAMERA_ONLY_PROOFS: both must use the same rule.
+            self.camera_only_proofs = False
             self.answers: dict[str, list[GuardianAnswer]] = {}
             self.verdicts: dict[str, StoredVerdict] = {}
             self.transfers: dict[str, TransferResult] = {}
@@ -109,6 +155,30 @@ class MockPlatform:
     def add_proof(self, proof: Proof) -> None:
         with self.lock:
             self.proofs[proof.id] = proof
+
+    def proof(self, proof_id: str) -> Proof | None:
+        """A stored proof with its integrity metadata. A real platform sets these at
+        upload; for proofs added directly in tests, the mock derives them: the request
+        is the one request that references the proof."""
+        pr = self.proofs.get(proof_id)
+        if pr is None:
+            return None
+        update: dict = {}
+        if pr.request_id is None and pr.dependent_id is None:
+            owners = [r for r in self.requests.values() if any(ref.id == proof_id for ref in r.proofs)]
+            if len(owners) == 1:
+                update |= {"request_id": owners[0].id, "dependent_id": owners[0].dependent_id}
+        if pr.sha256 is None and (digest := proof_digest(pr)):
+            update["sha256"] = digest
+        return pr.model_copy(update=update) if update else pr
+
+    def _proof_keys(self, guardian_id: str, pr: Proof, findings: ProofFindingsRecord | None) -> list[tuple[str, str]]:
+        keys = [(guardian_id, f"id:{pr.id}")]
+        if pr.sha256:
+            keys.append((guardian_id, f"sha256:{pr.sha256}"))
+        if findings:
+            keys.append((guardian_id, f"receipt:{receipt_fingerprint(findings)}"))
+        return keys
 
     def context(self, dependent_id: str) -> AgentContext:
         d = self.dependents[dependent_id]
@@ -193,8 +263,31 @@ class MockPlatform:
                     or v.dependent_id != t.dependent_id
                 ):
                     return block("auditor verdict invalid")
+            # Proof: the engine's own records decide, not the agent's claims.
+            proofs = [self.proof(pid) for pid in t.proof_ids]
+            if any(pr is None for pr in proofs):
+                return block("unknown proof")
+            if any(pr.request_id != t.request_id or pr.dependent_id != t.dependent_id for pr in proofs):
+                return block("proof not for this request")
+            if t.trigger == "request" and t.amount >= d.policy.proof_threshold:
+                def counts(pr: Proof) -> bool:
+                    origin = self.proof(pr.derived_from) if pr.derived_from else None
+                    return counts_as_proof(pr, camera_only=self.camera_only_proofs, origin=origin)
+
+                usable = [
+                    pr for pr in proofs
+                    if counts(pr) and not set(self._proof_keys(d.guardian_id, pr, t.proof_findings)) & self.used_proofs
+                ]
+                if not usable:
+                    return block("proof already used" if any(counts(pr) for pr in proofs) else "proof required")
+                f = t.proof_findings
+                if f is None or not f.matches_claim or f.total < t.amount:
+                    return block("proof does not cover the transfer")
+            if needs_review:
                 stored.used = True
 
+            for pr in proofs:  # in the same step as the transfer: a proof backs one transfer
+                self.used_proofs.update(self._proof_keys(d.guardian_id, pr, t.proof_findings))
             d.spent_this_week += t.amount
             self.delegated[d.guardian_id] -= t.amount
             d.history.append(
@@ -272,9 +365,10 @@ class MockPlatform:
         @app.get(base + "/proofs/{pid}")
         def get_proof(pid: str, authorization: str = Header("")) -> Proof:
             maker_only(authorization)
-            if pid not in p.proofs:
+            proof = p.proof(pid)
+            if proof is None:
                 raise HTTPException(404, "no such proof")
-            return p.proofs[pid]
+            return proof
 
         @app.get(base + "/guardians/{gid}/answers")
         def answers(gid: str, authorization: str = Header("")) -> list[GuardianAnswer]:
@@ -395,6 +489,19 @@ class MockPlatform:
             admin_only(authorization)
             with p.lock:
                 req = p.requests[rid]
+                # What a real platform does at upload: bind the proof to its request,
+                # hash it and flag exact duplicates within the family.
+                guardian = p.dependents[req.dependent_id].guardian_id
+                digest = proof_digest(body)
+                family = {dep.dependent_id for dep in p.dependents.values() if dep.guardian_id == guardian}
+                seen = any(
+                    other.sha256 == digest or proof_digest(other) == digest
+                    for other in p.proofs.values() if other.dependent_id in family
+                )
+                body = body.model_copy(update={
+                    "request_id": rid, "dependent_id": req.dependent_id, "uploaded_at": p._now(), "sha256": digest,
+                    "flags": sorted({*body.flags, "duplicate"}) if digest and seen else body.flags,
+                })
                 p.add_proof(body)
                 updated = req.model_copy(update={
                     "proofs": [*req.proofs, ProofRef(id=body.id, media_type=body.media_type)],

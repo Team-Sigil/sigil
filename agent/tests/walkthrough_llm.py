@@ -80,7 +80,9 @@ class WalkthroughLLM:
             text("This fits the guidance."),
             tool_use("request_transfer", amount=amount, purpose=words[:100] or "request",
                      category=_category(words), category_confidence=0.9,
-                     reasoning="The request matches the guardian's guidance and the budget allows it."),
+                     reasoning="The request matches the guardian's guidance and the budget allows it.",
+                     **({"proof_findings": {"merchant": "receipt", "date": "2026-10-13", "total": amount,
+                                            "matches_claim": True}} if amount >= 25 else {})),
         )
 
     def parse(self, *, system: str, messages: list[dict], output_format: type):

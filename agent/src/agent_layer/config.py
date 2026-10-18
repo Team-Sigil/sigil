@@ -11,6 +11,11 @@ def _env_int(name: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    return raw.strip().lower() in ("1", "true", "yes", "on") if raw else default
+
+
 @dataclass(frozen=True)
 class Limits:
     """Guardrail limits. Defaults are deliberately tight; raise them per deployment."""
@@ -37,6 +42,9 @@ class Limits:
     max_guardian_answer_chars: int = 1_000
     max_event_chars: int = 300
     max_platform_reason_chars: int = 300
+    # Only verified in-app captures (source "photo"), and text read from them, count as
+    # proof. Turn on once the app's camera flow ships; the engine must use the same rule.
+    camera_only_proofs: bool = False
     # Fraction of the weekly cap used as the review threshold when the guardian set none.
     default_review_fraction: float = 0.25
 
@@ -59,6 +67,7 @@ class Settings:
         limits = Limits(
             max_loop_turns=_env_int("AGENT_MAX_LOOP_TURNS", Limits.max_loop_turns),
             max_message_chars=_env_int("AGENT_MAX_MESSAGE_CHARS", Limits.max_message_chars),
+            camera_only_proofs=_env_bool("AGENT_CAMERA_ONLY_PROOFS", Limits.camera_only_proofs),
         )
         return cls(
             platform_base_url=os.environ["PLATFORM_API_URL"],

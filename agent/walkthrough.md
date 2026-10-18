@@ -161,7 +161,7 @@ Auditor reviews it first. It agrees, and the verdict id travels with the transfe
 
 ```bash
 http POST :8200/mock/requests/r-calc/proofs "Authorization:Bearer mock-admin-token" \
-    id=p-calc media_type=text/plain size_bytes:=48 \
+    id=p-calc media_type=text/plain source=ocr size_bytes:=48 \
     text="Office Mart  Casio fx-991EX calculator  30.00  2026-10-13"
 # expect: 200
 # body contains: "proofs":[{"id":"p-calc"
@@ -199,7 +199,7 @@ http POST :8200/mock/requests "Authorization:Bearer mock-admin-token" \
 
 ```bash
 http POST :8200/mock/requests/r-gems/proofs "Authorization:Bearer mock-admin-token" \
-    id=p-gems media_type=text/plain size_bytes:=40 text="GameStore  1200 gems pack  30.00"
+    id=p-gems media_type=text/plain source=ocr size_bytes:=40 text="GameStore  1200 gems pack  30.00"
 # expect: 200
 ```
 

@@ -72,8 +72,12 @@ What this means for your app:
   guardian's proof threshold are never sent without one. The agent looks at the first
   3 proofs on a request. Each must be JPEG, PNG, WebP, GIF (first frame only) or plain
   text, and at most 5 MB; anything else is skipped. Limit uploads to 3 in your app, so
-  that no proof is silently ignored. See [proof-images.md](proof-images.md) for planned
-  upload rules.
+  that no proof is silently ignored.
+- **A proof only counts for the request it was uploaded to, and only once.** Upload it
+  to that request (the platform records `request_id`); the same receipt, or a new photo
+  of it, can't back a second transfer. Text the dependent types is treated as their
+  claim, not as proof: prefer the in-app camera for receipts. See
+  [proof-images.md](proof-images.md#proof-integrity).
 - **Any of English, Simplified or Traditional Chinese works.** The agent replies to the
   dependent in the language and script of their latest message, and writes guardian
   summaries and questions in the guardian's language. Set `dependent_locale` and

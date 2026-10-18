@@ -189,6 +189,11 @@ sequenceDiagram
    cache reads. See [proof-images.md](proof-images.md).
 7. **No body size limit on the inbound API.** FastAPI/uvicorn read the whole request
    body before validating it. Set a limit in the gateway or a reverse proxy.
+8. **Proof forgery is limited, not solved.** The agent and engine catch mis-paired,
+   typed, tampered and reused proofs, but a convincing fake from a new shop still gets
+   through, up to `max_per_request`. Near-duplicate detection (perceptual hashing) and
+   metadata flags are the platform's job and aren't in the mock. See
+   [proof-images.md](proof-images.md#proof-integrity).
 
 ### Differences from the architecture doc
 
@@ -227,6 +232,7 @@ firewall, no DB credentials in the agent's environment).
 | Platform | A trusted channel that needed fixing (hidden characters, oversized, markup), or a proof whose bytes don't match its declared size, adds `platform_text_anomaly` and **forces an Auditor review** | `guardrails/input.py`, `maker/context.py` |
 | Tools | Allowlisted tools per mode; strict Pydantic arguments (`extra="forbid"`, so no recipient can be added); display amounts with max 2 decimals converted to integer base units | `guardrails/tools.py`, `contracts.py` |
 | Tools | Pre-checks before any API call: frozen, blocked category, per-request max, weekly budget, reservoir, **an amount stated in `amount_requested`** (never guessed from the chat), not more than requested, proof threshold, allowance ceiling (1.5× usual) | `guardrails/tools.py` |
+| Proofs | A proof counts toward the threshold only if it belongs to this request, its bytes match the platform's hash, it is an image or platform-extracted (`ocr`) text, and it isn't a duplicate or AI-generated (with `AGENT_CAMERA_ONLY_PROOFS`, it must also be a verified in-app capture). Above the threshold the model must report `proof_findings` (merchant, date, total, receipt number, matches claim); a mismatch or a total below the amount is refused. Platform flags (near-duplicate, screenshot, old, edited, AI-suspected, re-photographed screen) force an Auditor review | `maker/context.py`, `guardrails/tools.py` |
 | Tools | Per-run limits: 1 transfer, 1 guardian question, 10 tool calls, 8 model turns | `config.py` |
 | Tools | Idempotency key derived by code from request state (`req:{id}:{thread length}`, `allowance:{dep}:{iso week}`), never chosen by the model | `maker/agent.py` |
 | Auditor | Required when trusted triggers fire (amount ≥ review threshold, emergency, off-pattern amount, new category, allowance above usual) or agent triggers fire (low category confidence, injection signals) | `auditor/triggers.py` |
@@ -305,7 +311,12 @@ so `502` to the gateway, and no model call):
 - For an image proof, `size_bytes` equal to the decoded length of `data_b64`. A mismatch
   skips the proof and forces an Auditor review.
 
-Proof image requirements and open questions: [proof-images.md](proof-images.md).
+Proofs carry integrity fields (`request_id`, `dependent_id`, `uploaded_at`, `sha256`,
+`source`, `flags`), and transfers carry `proof_ids` and `proof_findings`. Above the
+proof threshold, the engine must require an unused proof for that request and mark it
+used in the same transaction as the transfer, so one receipt backs one transfer.
+`mock_platform/app.py` implements this as a reference. Requirements, upload rules and
+open questions: [proof-images.md](proof-images.md).
 
 ## Inbound API (called by the gateway)
 
@@ -341,4 +352,6 @@ ANTHROPIC_API_KEY=sk-... docker compose up --build
 command in it is also a test (`pytest tests/test_walkthrough.py`).
 
 Optional settings: `AGENT_MAKER_MODEL`, `AGENT_AUDITOR_MODEL` (both default to
-`claude-opus-5-5`), `AGENT_MAKER_EFFORT`, `AGENT_AUDITOR_EFFORT`, `AGENT_SCHEDULER=0`.
+`claude-opus-5-5`), `AGENT_MAKER_EFFORT`, `AGENT_AUDITOR_EFFORT`, `AGENT_SCHEDULER=0`,
+`AGENT_CAMERA_ONLY_PROOFS=1` (only verified in-app captures count as proof; turn on with
+the engine's matching rule once the app's camera flow ships).

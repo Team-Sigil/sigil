@@ -7,7 +7,7 @@ Split in two on purpose:
   transfer that needs review but carries no valid verdict, so a manipulated maker
   cannot skip review by lying.
 * ``agent_triggers`` adds signals only the agent zone sees (the model's category
-  confidence, injection signals). They can only add reviews, never remove one.
+  confidence, injection signals, proof integrity flags). They can only add reviews, never remove one.
 """
 
 from __future__ import annotations
@@ -57,10 +57,14 @@ def trusted_triggers(
     return reasons
 
 
-def agent_triggers(*, category_confidence: float, injection_signals: list[str]) -> list[str]:
+def agent_triggers(
+    *, category_confidence: float, injection_signals: list[str], proof_concerns: list[str] = ()
+) -> list[str]:
     reasons: list[str] = []
     if category_confidence < LOW_CONFIDENCE:
         reasons.append("low_category_confidence")
     if injection_signals:
         reasons.append("injection_signals")
+    if proof_concerns:  # the platform flagged a proof: near-duplicate, screenshot, …
+        reasons.append("proof_concerns")
     return reasons

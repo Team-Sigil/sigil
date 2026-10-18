@@ -9,7 +9,9 @@ DESCRIPTIONS = {
     "request_transfer": (
         "Ask the platform to send tokens to the dependent's registered wallet. There is no "
         "recipient field. Limits are checked by code; larger or unusual transfers are "
-        "reviewed by the Auditor first. At most one per request."
+        "reviewed by the Auditor first. At most one per request. At or above the proof "
+        "threshold, fill proof_findings from the proof itself; code refuses the transfer if "
+        "it doesn't match the claim or its total is lower than the amount."
     ),
     "ask_for_proof": "Ask the dependent for a receipt, quote or photo before deciding.",
     "ask_guardian": (

@@ -12,10 +12,18 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 from dataclasses import dataclass, field
 
 from agent_layer.config import Limits
-from agent_layer.contracts import AgentContext, DependentRequest, Proof
+from agent_layer.contracts import (
+    PROOF_FLAGS,
+    PROOF_FLAGS_CONCERNS,
+    PROOF_FLAGS_DISQUALIFYING,
+    AgentContext,
+    DependentRequest,
+    Proof,
+)
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import PLATFORM_ANOMALY_SIGNAL, PlatformText, sanitize, wrap_untrusted
 from agent_layer.i18n import Locale, dependent_locale, guardian_locale, language_instruction
@@ -32,6 +40,8 @@ class PreparedInput:
     proof_texts: list[str] = field(default_factory=list)
     proof_images: list[dict] = field(default_factory=list)
     signals: list[str] = field(default_factory=list)
+    proof_ids: list[str] = field(default_factory=list)  # proofs that count as proof
+    proof_concerns: list[str] = field(default_factory=list)  # integrity concerns: force a review
     dependent_locale: Locale = "en"
     guardian_locale: Locale = "en"
 
@@ -78,43 +88,122 @@ def context_block(ctx: AgentContext, limits: Limits, pt: PlatformText) -> str:
     )
 
 
-def _proof_parts(
-    proofs: list[Proof], limits: Limits, log: GuardrailLog
-) -> tuple[list[dict], list[str], list[str]]:
-    images: list[dict] = []
-    texts: list[str] = []
-    signals: list[str] = []
+def _taken_in_app(proof: Proof, is_image: bool, by_id: dict[str, Proof], request: DependentRequest) -> bool:
+    """A verified in-app capture, or text the platform read from one on this request."""
+    if is_image:
+        return proof.source == "photo"
+    origin = by_id.get(proof.derived_from or "")
+    return (
+        proof.source == "ocr" and origin is not None and origin.source == "photo"
+        and origin.request_id == request.id and not set(origin.flags) & PROOF_FLAGS_DISQUALIFYING
+    )
+
+
+@dataclass
+class ProofView:
+    images: list[dict] = field(default_factory=list)
+    texts: list[str] = field(default_factory=list)  # sanitised, one per shown text proof
+    notes: list[str] = field(default_factory=list)  # code-written notes about the proofs
+    signals: list[str] = field(default_factory=list)  # injection or tampering signals
+    concerns: list[str] = field(default_factory=list)  # integrity concerns: force a review
+    qualifying_ids: list[str] = field(default_factory=list)  # proofs that count as proof
+
+
+def _proof_parts(proofs: list[Proof], request: DependentRequest, limits: Limits, log: GuardrailLog) -> ProofView:
+    """Check each proof and decide whether it is shown, and whether it counts as proof.
+
+    It counts only if it belongs to this request, its bytes match the platform's hash,
+    it is an image or text the platform extracted from one (never typed), and it is not
+    a duplicate or AI-generated. With ``camera_only_proofs``, it must also be a verified
+    in-app capture (or text read from one). Everything else is shown as context at most.
+    """
+    view = ProofView()
+    by_id = {p.id: p for p in proofs}
     for proof in proofs:
+        label = f"proof {proof.id}"
+        # Pairing: the platform must say which request the proof was uploaded for.
+        if (proof.request_id, proof.dependent_id) == (None, None):
+            log.add("proof_unpaired", proof.id)
+            paired = False
+        elif proof.request_id != request.id or proof.dependent_id != request.dependent_id:
+            log.add("proof_skipped", f"{proof.id} belongs to another request")
+            view.signals.append(PLATFORM_ANOMALY_SIGNAL)
+            continue
+        else:
+            paired = True
+
         # The declared size is only a hint: the check is on the bytes actually received.
         if proof.size_bytes > limits.max_proof_bytes:
             log.add("proof_skipped", f"{proof.id} too large")
             continue
         if proof.media_type in IMAGE_TYPES and proof.data_b64:
             try:
-                actual = len(base64.b64decode(proof.data_b64, validate=True))
+                raw = base64.b64decode(proof.data_b64, validate=True)
             except (binascii.Error, ValueError):
                 log.add("proof_skipped", f"{proof.id} invalid base64")
                 continue
-            if actual > limits.max_proof_bytes or actual != proof.size_bytes:
-                log.add("proof_skipped", f"{proof.id} size mismatch (declared {proof.size_bytes}, got {actual})")
-                signals.append(PLATFORM_ANOMALY_SIGNAL)
+            if len(raw) > limits.max_proof_bytes or len(raw) != proof.size_bytes:
+                log.add("proof_skipped", f"{proof.id} size mismatch (declared {proof.size_bytes}, got {len(raw)})")
+                view.signals.append(PLATFORM_ANOMALY_SIGNAL)
                 continue
-            images.append(
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": proof.media_type, "data": proof.data_b64},
-                }
-            )
+            is_image = True
         elif proof.media_type in TEXT_TYPES and proof.text is not None:
-            if len(proof.text.encode()) > limits.max_proof_bytes:
+            raw = proof.text.encode()
+            if len(raw) > limits.max_proof_bytes:
                 log.add("proof_skipped", f"{proof.id} too large")
                 continue
-            s = sanitize(proof.text, max_chars=limits.max_proof_text_chars, log=log, source=f"proof {proof.id}")
-            texts.append(s.text)
-            signals.extend(s.signals)
+            is_image = False
         else:
             log.add("proof_skipped", f"{proof.id} unsupported type {proof.media_type}")
-    return images, texts, signals
+            continue
+        if proof.sha256 is not None and hashlib.sha256(raw).hexdigest() != proof.sha256:
+            log.add("proof_skipped", f"{proof.id} hash mismatch")
+            view.signals.append(PLATFORM_ANOMALY_SIGNAL)
+            continue
+
+        index = str(len(view.texts) if not is_image else len(view.images))
+        if is_image:
+            view.images.append(
+                {"type": "image", "source": {"type": "base64", "media_type": proof.media_type, "data": proof.data_b64}}
+            )
+        else:
+            s = sanitize(proof.text, max_chars=limits.max_proof_text_chars, log=log, source=label)
+            view.texts.append(s.text)
+            view.signals.extend(s.signals)
+
+        flags = sorted(f for f in proof.flags if f in PROOF_FLAGS)
+        if len(flags) < len(proof.flags):
+            log.add("proof_flags_ignored", proof.id)
+        kind = "image" if is_image else "text"
+        concerns = [f for f in flags if f in PROOF_FLAGS_CONCERNS]
+        if concerns:
+            view.concerns.extend(f"proof_{f}" for f in concerns)
+            log.add("proof_flagged", f"{proof.id}: {','.join(concerns)}")
+            view.notes.append(f"The platform flagged {kind} proof {index}: {', '.join(concerns)}.")
+        if "camera_signed" in flags:
+            view.notes.append(
+                f"Image proof {index} carries a valid camera signature: it shows where the photo was "
+                "taken, not that the receipt is genuine."
+            )
+        typed = proof.source == "typed" or (not is_image and proof.source != "ocr")
+        camera_ok = _taken_in_app(proof, is_image, by_id, request) if limits.camera_only_proofs else True
+        if typed:
+            view.notes.append(
+                f"Text proof {index} was typed by the dependent, not extracted from a document: "
+                "treat it as their claim, not as evidence."
+            )
+        elif not paired:
+            view.notes.append(f"The platform didn't confirm {kind} proof {index} was uploaded for this request.")
+        elif not camera_ok:
+            log.add("proof_not_camera", proof.id)
+            view.notes.append(
+                f"{kind.capitalize()} proof {index} wasn't taken with the app's camera, so it can't be used as evidence."
+            )
+        elif is_image and proof.source == "photo":
+            view.notes.append(f"Image proof {index} was taken with the app's camera and verified.")
+        if paired and not typed and camera_ok and not set(flags) & PROOF_FLAGS_DISQUALIFYING:
+            view.qualifying_ids.append(proof.id)
+    return view
 
 
 def prepare_request_input(
@@ -154,13 +243,19 @@ def prepare_request_input(
                 "system_event", msg.text, max_chars=limits.max_event_chars, source="system_event",
             ))
 
-    images, texts, proof_signals = _proof_parts(proofs, limits, log)
-    signals.extend(proof_signals)
+    pv = _proof_parts(proofs, request, limits, log)
+    images, texts = pv.images, pv.texts
+    signals.extend(pv.signals)
     proof_section = "\n".join(
         wrap_untrusted("untrusted_proof", t, index=str(i)) for i, t in enumerate(texts)
     )
     if images:
         proof_section += f"\n({len(images)} image proof(s) attached above.)"
+    if pv.notes:
+        proof_section += "\n" + "\n".join(pv.notes)
+        case_parts.append("Notes on the proof: " + " ".join(pv.notes))
+    if proofs and not pv.qualifying_ids:
+        proof_section += "\nNone of the proofs can be used as evidence, so no amount that needs proof can be sent."
 
     text_block = context_block(ctx, limits, pt)
     unique_signals = sorted(set(signals + pt.signals))
@@ -190,6 +285,8 @@ def prepare_request_input(
         proof_texts=texts,
         proof_images=images,
         signals=unique_signals,
+        proof_ids=pv.qualifying_ids,
+        proof_concerns=sorted(set(pv.concerns)),
         dependent_locale=dep_locale,
         guardian_locale=guard_locale,
     )

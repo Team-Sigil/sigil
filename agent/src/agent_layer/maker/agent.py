@@ -34,6 +34,8 @@ from agent_layer.contracts import (
     NotifyGuardianArgs,
     Outcome,
     PolicyProposal,
+    ProofFindings,
+    ProofFindingsRecord,
     ProofRequest,
     ProposePolicyUpdateArgs,
     RequestTransferArgs,
@@ -76,6 +78,15 @@ class _Run:
     @property
     def request_id(self) -> str | None:
         return self.request.id if self.request else None
+
+
+def _findings_record(f: ProofFindings | None) -> ProofFindingsRecord | None:
+    if f is None:
+        return None
+    return ProofFindingsRecord(
+        merchant=f.merchant, date=f.date, total=to_base(f.total), receipt_number=f.receipt_number,
+        matches_claim=f.matches_claim,
+    )
 
 
 def _short_hash(text: str) -> str:
@@ -153,7 +164,7 @@ class MakerAgent:
             prepared=prepared,
             idempotency_key=idempotency_key,
             log=log,
-            guard=ToolGuard(ctx, self._limits, log, mode=mode, request=request),
+            guard=ToolGuard(ctx, self._limits, log, mode=mode, request=request, proof_ids=prepared.proof_ids),
             budget=TokenBudget(self._api, ctx.guardian_id, log),
         )
 
@@ -285,7 +296,11 @@ class MakerAgent:
             history=run.ctx.history,
             trigger=run.mode,
             emergency_claimed=bool(run.request and run.request.emergency_claimed),
-        ) + agent_triggers(category_confidence=args.category_confidence, injection_signals=run.prepared.signals)
+        ) + agent_triggers(
+            category_confidence=args.category_confidence,
+            injection_signals=run.prepared.signals,
+            proof_concerns=run.prepared.proof_concerns,
+        )
 
         verdict_id: str | None = None
         if triggers:
@@ -348,6 +363,8 @@ class MakerAgent:
                 idempotency_key=run.idempotency_key,
                 policy_version=run.ctx.policy.version,
                 auditor_verdict_id=verdict_id,
+                proof_ids=list(run.prepared.proof_ids),
+                proof_findings=_findings_record(args.proof_findings),
             )
         )
         if result.status in ("sent", "duplicate"):
