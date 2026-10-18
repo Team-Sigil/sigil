@@ -250,8 +250,13 @@ class Proof(Base):
     kind: Mapped[str] = mapped_column(String(16))  # receipt | quote | photo
     media_type: Mapped[str] = mapped_column(String(32))
     size_bytes: Mapped[int] = mapped_column(Integer)
-    content: Mapped[bytes] = mapped_column(EncryptedBytes)
+    content: Mapped[bytes] = mapped_column(EncryptedBytes)  # the normalised copy the agent sees
     sha256: Mapped[str] = mapped_column(String(HASH_LEN))
+    # Images only: the bytes as uploaded (kept as evidence), their hash, and a perceptual hash
+    # of the stored copy for near-duplicate detection.
+    original: Mapped[bytes | None] = mapped_column(EncryptedBytes)
+    original_sha256: Mapped[str | None] = mapped_column(String(HASH_LEN))
+    dhash: Mapped[int | None] = mapped_column(BigInteger)
     source: Mapped[str] = mapped_column(String(16))  # photo | file | ocr | typed
     derived_from: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("proofs.id"))
     flags: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
@@ -293,6 +298,19 @@ class CaptureTicket(Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ReceiptFingerprint(Base):
+    """A receipt that backed a transfer, across all families, as a keyed hash of merchant,
+    date, total and receipt number: the same receipt cannot back transfers in two families,
+    and the table reveals nothing about the receipts themselves."""
+
+    __tablename__ = "receipt_fingerprints"
+
+    key_hash: Mapped[str] = mapped_column(String(HASH_LEN), primary_key=True)
+    family_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("families.id"))
+    transfer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("transfers.id"))
+    created_at: Mapped[datetime] = created_at()
 
 
 class UsedProofKey(Base):

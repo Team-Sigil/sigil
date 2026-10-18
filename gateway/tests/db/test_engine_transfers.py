@@ -3,6 +3,7 @@ import uuid
 
 from nacl.signing import SigningKey
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from gateway.contracts.agent import ProofFindingsRecord, TransferInstruction
 from gateway.contracts.policy import policy_hash
@@ -11,7 +12,7 @@ from gateway.db import audit_log
 from gateway.db.models import BudgetCounter, Family, GuardianQuestion, Policy, Request, Transfer
 from gateway.engine.transfers import SIGNER_UNAVAILABLE
 from gateway.enums import GuardianDecision, QuestionStatus, TransferStatus
-from tests.db.world import AUSD, POLICY, WEEK, World, wallet
+from tests.db.world import AUSD, POLICY, WEEK, World, build_world, wallet
 
 
 async def test_cleared_transfer_is_sent_and_settled(world: World) -> None:
@@ -228,6 +229,29 @@ class TestProofs:
             )
         )
         assert result.reason == "proof not for this request"
+
+
+async def test_same_receipt_cannot_back_transfers_in_two_families(
+    world: World, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Agent handoff item 6: the receipt fingerprint is shared across families (keyed hash)."""
+    findings = ProofFindingsRecord(
+        merchant="Book Shop",
+        date="2026-10-14",
+        total=30 * AUSD,
+        receipt_number="R-1",
+        matches_claim=True,
+    )
+    other = await build_world(sessionmaker)
+    for family_world, expected in ((world, "sent"), (other, "proof already used")):
+        request = await family_world.add_request(30 * AUSD)
+        proof = await family_world.add_proof(request, content=f"photo-{expected}".encode())
+        result = await family_world.engine.submit(
+            family_world.instruction(
+                request, amount=30 * AUSD, proof_ids=[str(proof.id)], proof_findings=findings
+            )
+        )
+        assert (result.reason if result.status == "blocked" else result.status) == expected
 
 
 class TestGuardianOverride:

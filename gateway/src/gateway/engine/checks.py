@@ -56,6 +56,8 @@ class TransferFacts:
     # Verified-capture mode (CAMERA_ONLY_PROOFS), and the photos OCR proofs were read from.
     camera_only: bool = False
     proof_origins: dict[str, Proof] = field(default_factory=dict)
+    # The same receipt already backed a transfer in any family (keyed fingerprint).
+    receipt_already_used: bool = False
     # Set only when a wallet-signed guardian approval of exactly this amount for this request
     # was found and verified (SPEC SEC-05). Lets the transfer past the amount cap, the weekly
     # cap and the Auditor requirement; never past anything else.
@@ -171,4 +173,6 @@ def _proof_failure(facts: TransferFacts, policy: PolicyBody) -> str | None:
     findings = t.proof_findings
     if findings is None or not findings.matches_claim or findings.total < t.amount:
         return "proof does not cover the transfer"
+    if facts.receipt_already_used:
+        return "proof already used"
     return None

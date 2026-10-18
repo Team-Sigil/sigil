@@ -1,9 +1,12 @@
+import base64
 import hashlib
+import io
 from typing import Any
 
 import httpx
 import pytest
 from nacl.signing import SigningKey
+from PIL import Image
 from sqlalchemy import select, text
 
 from gateway.contracts.signing import answer_question_message, freeze_message
@@ -11,12 +14,14 @@ from gateway.core.config import Settings
 from gateway.db.models import GuardianQuestion, Proof
 from gateway.enums import GuardianDecision
 from gateway.main import create_app
+from tests.db.test_agent_api import MAKER
 from tests.db.test_app_auth import login, sign
 from tests.db.test_app_families_policy import TestFamilies, nonce
 from tests.db.world import AGENT_WALLET, AUSD, MINT, World
+from tests.images import jpeg, jpeg_of, picture, png
 
-JPEG = b"\xff\xd8\xff\xe0" + b"receipt-bytes" * 10
-PNG = b"\x89PNG\r\n\x1a\n" + b"png-bytes" * 10
+JPEG = jpeg(1)
+PNG = png(2)
 
 
 async def new_request(
@@ -146,7 +151,10 @@ class TestProofs:
         async with world.sessionmaker() as session:
             stored = await session.scalar(select(Proof))
         assert stored is not None
-        assert stored.sha256 == hashlib.sha256(JPEG).hexdigest() and stored.source == "file"
+        # The agent sees the normalised copy; the upload is kept, encrypted, as evidence.
+        assert stored.original_sha256 == hashlib.sha256(JPEG).hexdigest()
+        assert stored.sha256 == hashlib.sha256(stored.content).hexdigest()
+        assert stored.original == JPEG and stored.source == "file"
 
     async def test_reupload_is_flagged_as_duplicate(
         self, app_client: httpx.AsyncClient, world: World
@@ -185,12 +193,12 @@ class TestProofs:
     async def test_size_and_count_limits(self, app_client: httpx.AsyncClient, world: World) -> None:
         headers = await login(app_client, world.dependent_key)
         request_id = (await new_request(app_client, headers))["request"]["id"]
-        too_big = JPEG + b"0" * (5 * 1024 * 1024)
+        too_big = JPEG + b"0" * (15 * 1024 * 1024)
         assert (await upload(app_client, headers, request_id, too_big)).status_code == 413
         for i in range(3):
-            response = await upload(app_client, headers, request_id, PNG + bytes([i]))
+            response = await upload(app_client, headers, request_id, png(10 + i))
             assert response.status_code == 200
-        assert (await upload(app_client, headers, request_id, PNG + b"x")).status_code == 409
+        assert (await upload(app_client, headers, request_id, png(20))).status_code == 409
 
 
 class TestGuardianAnswers:
@@ -363,3 +371,50 @@ async def test_dependent_daily_message_limit(world: World) -> None:
         assert third.status_code == 429
         assert third.json()["error"]["code"] == "DAILY_LIMIT_REACHED"
         assert len(world.agent.processed) == 2  # the refused message never reached the agent
+
+
+class TestNormalisation:
+    """Agent handoff items 4 and 6: what the agent receives, and the integrity flags."""
+
+    async def test_agent_receives_a_stripped_copy(
+        self, app_client: httpx.AsyncClient, world: World
+    ) -> None:
+        exif = Image.Exif()
+        exif[0x010F], exif[0x0110] = "Apple", "iPhone 16"
+        exif.get_ifd(0x8825)[2] = (13.0, 45.0, 0.0)  # GPS latitude: the dependent's location
+        out = io.BytesIO()
+        picture(4, (3000, 4000)).save(out, format="JPEG", exif=exif.tobytes())
+
+        headers = await login(app_client, world.dependent_key)
+        request_id = (await new_request(app_client, headers))["request"]["id"]
+        proof = (await upload(app_client, headers, request_id, out.getvalue())).json()["proof"]
+        seen = (await app_client.get(f"/agent/v1/proofs/{proof['id']}", headers=MAKER)).json()
+        stored = Image.open(io.BytesIO(base64.b64decode(seen["data_b64"])))
+        assert dict(stored.getexif()) == {} and max(stored.size) == 2576
+        assert seen["size_bytes"] == len(base64.b64decode(seen["data_b64"]))
+
+    async def test_rephotographed_receipt_is_near_duplicate(
+        self, app_client: httpx.AsyncClient, world: World
+    ) -> None:
+        headers = await login(app_client, world.dependent_key)
+        first = (await new_request(app_client, headers))["request"]["id"]
+        second = (await new_request(app_client, headers))["request"]["id"]
+        receipt = picture(7, (1200, 1600))
+        await upload(app_client, headers, first, jpeg_of(receipt))
+        # The same receipt again, smaller and re-compressed: a new SHA-256, the same picture.
+        again = await upload(app_client, headers, second, jpeg_of(receipt.resize((900, 1200))))
+        assert again.json()["proof"]["flags"] == ["near_duplicate"]
+
+    async def test_screenshot_is_flagged(self, app_client: httpx.AsyncClient, world: World) -> None:
+        headers = await login(app_client, world.dependent_key)
+        request_id = (await new_request(app_client, headers))["request"]["id"]
+        response = await upload(app_client, headers, request_id, png(8, (1170, 2532)), "image/png")
+        assert {"no_camera_metadata", "screenshot"} <= set(response.json()["proof"]["flags"])
+
+    async def test_gif_is_refused(self, app_client: httpx.AsyncClient, world: World) -> None:
+        out = io.BytesIO()
+        picture(9).save(out, format="GIF")
+        headers = await login(app_client, world.dependent_key)
+        request_id = (await new_request(app_client, headers))["request"]["id"]
+        response = await upload(app_client, headers, request_id, out.getvalue(), "image/gif")
+        assert response.status_code == 422

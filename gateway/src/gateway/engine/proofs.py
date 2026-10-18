@@ -3,6 +3,8 @@
 Ported from the agent layer's reference engine (`mock_platform/app.py`, as of 72b80be).
 """
 
+import hashlib
+import hmac
 import re
 
 from gateway.contracts.agent import PROOF_FLAGS_DISQUALIFYING, Proof, ProofFindingsRecord
@@ -45,6 +47,12 @@ def receipt_fingerprint(findings: ProofFindingsRecord) -> str:
             norm(findings.receipt_number),
         ]
     )
+
+
+def keyed_fingerprint(findings: ProofFindingsRecord, key: bytes) -> str:
+    """The receipt fingerprint as a keyed hash, so a table shared by every family reveals
+    nothing about the receipts in it."""
+    return hmac.new(key, receipt_fingerprint(findings).encode(), hashlib.sha256).hexdigest()
 
 
 def proof_keys(proof: Proof, findings: ProofFindingsRecord | None) -> list[str]:

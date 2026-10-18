@@ -5,6 +5,7 @@ Every new message or proof is stored, then the agent runs on the request
 app can retry with `POST /requests/{id}/process`.
 """
 
+import asyncio
 import hashlib
 from datetime import UTC, datetime
 from typing import Annotated
@@ -28,11 +29,12 @@ from gateway.db.models import Request as RequestRow
 from gateway.db.session import SessionDep
 from gateway.engine.transfers import parse_uuid
 from gateway.enums import AuditEvent, Role, ThreadRole
+from gateway.proof_images import NEAR_DUPLICATE_BITS, ImageRejectedError, hamming, normalise
 
 router = APIRouter(prefix="/api/v1/requests", tags=["requests"])
 
 MAX_MESSAGE_CHARS = 2_000
-MAX_PROOF_BYTES = 5 * 1024 * 1024
+MAX_PROOF_BYTES = 15 * 1024 * 1024  # raw upload; the stored copy is normalised to <= 3.75 MB
 MAX_PROOFS_PER_REQUEST = 3  # the agent reads the first 3; more would be silently ignored
 LIST_LIMIT = 50
 
@@ -46,7 +48,7 @@ class PayloadTooLargeError(DomainError):
 class UnsupportedProofError(DomainError):
     code = "UNSUPPORTED_PROOF"
     status = 422
-    message = "Proofs must be a JPEG, PNG, WebP or GIF image, or plain text."
+    message = "Proofs must be a JPEG, PNG or WebP image (at least 200 px), or plain text."
 
 
 class DailyLimitError(DomainError):
@@ -196,19 +198,6 @@ async def run_agent(request: Request, request_id: str) -> DecisionView:
     return _decision_view(await agent.process_request(request_id))
 
 
-def sniff_image(data: bytes) -> str | None:
-    """The image type from its bytes, never from the client's Content-Type."""
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if data[:6] in (b"GIF87a", b"GIF89a"):
-        return "image/gif"
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    return None
-
-
 @router.post("")
 async def create_request(
     body: NewRequest, dependent: FamilyDependentDep, request: Request, session: SessionDep
@@ -284,50 +273,84 @@ async def upload_proof(
     data = await file.read(MAX_PROOF_BYTES + 1)
     if len(data) > MAX_PROOF_BYTES:
         raise PayloadTooLargeError()
-    media_type = sniff_image(data)
-    # A plain upload is a "file"; typed text is only a claim; "photo" needs a verified capture.
-    source = "file"
-    verified = None
-    if media_type is not None and capture_claim and capture_signature:
-        config: CaptureConfig = request.app.state.capture
-        verified = await verify_capture(
-            session,
-            config,
-            dependent.user,
-            row,
-            data,
-            capture_claim,
-            capture_signature,
-            datetime.now(UTC),
-        )
-        if verified is not None:
-            source = "photo"
-    if media_type is None:
-        if not (file.content_type or "").startswith("text/plain") or not data:
-            raise UnsupportedProofError()
+    now = datetime.now(UTC)
+    family_id = dependent.family.id
+
+    if (file.content_type or "").startswith("text/plain"):
+        # Typed text is the dependent's claim, never evidence.
         try:
             data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise UnsupportedProofError() from exc
-        media_type, source = "text/plain", "typed"
-
-    digest = hashlib.sha256(data).hexdigest()
-    seen = await session.scalar(
-        select(Proof.id).where(Proof.family_id == dependent.family.id, Proof.sha256 == digest)
-    )
-    proof = Proof(
-        request_id=row.id,
-        family_id=dependent.family.id,
-        kind=kind,
-        media_type=media_type,
-        size_bytes=len(data),
-        content=data,
-        sha256=digest,
-        source=source,
-        flags=(["duplicate"] if seen else []) + (["camera_signed"] if verified else []),
-        device_id=verified.device_id if verified else None,
-        captured_at=verified.captured_at if verified else None,
-    )
+        if not data:
+            raise UnsupportedProofError()
+        digest = hashlib.sha256(data).hexdigest()
+        seen = await session.scalar(
+            select(Proof.id).where(Proof.family_id == family_id, Proof.sha256 == digest)
+        )
+        proof = Proof(
+            request_id=row.id,
+            family_id=family_id,
+            kind=kind,
+            media_type="text/plain",
+            size_bytes=len(data),
+            content=data,
+            sha256=digest,
+            source="typed",
+            flags=["duplicate"] if seen else [],
+        )
+    else:
+        # A verified capture is checked against the bytes the phone signed, so before
+        # normalising changes them.
+        verified = None
+        if capture_claim and capture_signature:
+            config: CaptureConfig = request.app.state.capture
+            verified = await verify_capture(
+                session, config, dependent.user, row, data, capture_claim, capture_signature, now
+            )
+        try:
+            normalised = await asyncio.to_thread(normalise, data, now)  # CPU work off the loop
+        except ImageRejectedError as exc:
+            raise UnsupportedProofError() from exc
+        digest = hashlib.sha256(normalised.data).hexdigest()
+        original_digest = hashlib.sha256(data).hexdigest()
+        earlier = (
+            await session.execute(
+                select(Proof.sha256, Proof.original_sha256, Proof.dhash).where(
+                    Proof.family_id == family_id
+                )
+            )
+        ).all()
+        duplicate = any(
+            digest in (stored, original) or original_digest in (stored, original)
+            for stored, original, _ in earlier
+        )
+        near = not duplicate and any(
+            perceptual is not None and hamming(perceptual, normalised.dhash) <= NEAR_DUPLICATE_BITS
+            for _, _, perceptual in earlier
+        )
+        flags = (
+            (["duplicate"] if duplicate else [])
+            + (["near_duplicate"] if near else [])
+            + normalised.flags
+            + (["camera_signed"] if verified else [])
+        )
+        proof = Proof(
+            request_id=row.id,
+            family_id=family_id,
+            kind=kind,
+            media_type=normalised.media_type,
+            size_bytes=len(normalised.data),
+            content=normalised.data,
+            sha256=digest,
+            original=data,
+            original_sha256=original_digest,
+            dhash=normalised.dhash,
+            source="photo" if verified else "file",
+            flags=flags,
+            device_id=verified.device_id if verified else None,
+            captured_at=verified.captured_at if verified else None,
+        )
     session.add(proof)
     await session.flush()
     session.add(Message(request_id=row.id, role=ThreadRole.DEPENDENT, text="(uploaded a proof)"))
@@ -335,7 +358,13 @@ async def upload_proof(
         session,
         dependent.family.id,
         AuditEvent.PROOF_UPLOADED,
-        {"request_id": str(row.id), "proof_id": str(proof.id), "sha256": digest, "source": source},
+        {
+            "request_id": str(row.id),
+            "proof_id": str(proof.id),
+            "sha256": digest,
+            "source": proof.source,
+            "flags": proof.flags,
+        },
     )
     await session.commit()
     return UploadedProof(proof=_proof_view(proof), decision=await run_agent(request, str(row.id)))

@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import hmac
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -96,6 +98,11 @@ def create_app(
         crypto,
         agent_wallet=settings.agent_wallet_pubkey,
         mint=settings.ausd_mint,
+        fingerprint_key=hmac.new(
+            settings.data_encryption_key.get_secret_value().encode(),
+            b"receipt-fingerprint",
+            hashlib.sha256,
+        ).digest(),
         camera_only=settings.camera_only_proofs,
     )
     install_error_handlers(app)

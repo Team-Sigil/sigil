@@ -16,7 +16,7 @@ from gateway.core.errors import error_response
 
 DEFAULT_BODY_LIMIT = 64 * 1024
 AGENT_BODY_LIMIT = 1024 * 1024
-PROOF_BODY_LIMIT = 6 * 1024 * 1024  # a 5 MB proof plus multipart overhead
+PROOF_BODY_LIMIT = 16 * 1024 * 1024  # a 15 MB raw proof plus multipart overhead
 PROOF_PATH = re.compile(r"^/api/v1/requests/[^/]+/proofs$")
 
 

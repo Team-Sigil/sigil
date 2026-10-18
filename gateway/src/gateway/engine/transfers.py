@@ -46,13 +46,14 @@ from gateway.db.models import (
     GuardianQuestion,
     Policy,
     Proof,
+    ReceiptFingerprint,
     Request,
     Transfer,
     UsedProofKey,
     User,
 )
 from gateway.engine.checks import RequestFacts, TransferFacts, VerdictFacts, check_transfer
-from gateway.engine.proofs import proof_keys
+from gateway.engine.proofs import keyed_fingerprint, proof_keys
 from gateway.enums import (
     AuditEvent,
     GuardianDecision,
@@ -149,6 +150,7 @@ class TransferEngine:
         *,
         agent_wallet: str,
         mint: str,
+        fingerprint_key: bytes = b"",
         camera_only: bool = False,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -157,6 +159,7 @@ class TransferEngine:
         self._agent_wallet = agent_wallet
         self._mint = mint
         self._camera_only = camera_only
+        self._fingerprint_key = fingerprint_key
         self._clock = clock
 
     async def submit(self, t: TransferInstruction) -> TransferResult:
@@ -248,6 +251,14 @@ class TransferEngine:
                 assert proof is not None
                 for key in proof_keys(proof, t.proof_findings):
                     session.add(UsedProofKey(family_id=family.id, key=key, transfer_id=transfer.id))
+            if t.proof_findings is not None and t.proof_ids:
+                session.add(
+                    ReceiptFingerprint(
+                        key_hash=keyed_fingerprint(t.proof_findings, self._fingerprint_key),
+                        family_id=family.id,
+                        transfer_id=transfer.id,
+                    )
+                )
             await audit_log.append(
                 session,
                 family.id,
@@ -379,6 +390,17 @@ class TransferEngine:
                         origin, dependent_id, with_content=False
                     )
 
+        receipt_used = False
+        if t.proof_findings is not None:
+            receipt_used = (
+                await session.scalar(
+                    select(ReceiptFingerprint.key_hash).where(
+                        ReceiptFingerprint.key_hash
+                        == keyed_fingerprint(t.proof_findings, self._fingerprint_key)
+                    )
+                )
+            ) is not None
+
         used_keys = await session.scalars(
             select(UsedProofKey.key).where(UsedProofKey.family_id == family.id)
         )
@@ -409,6 +431,7 @@ class TransferEngine:
             used_proof_keys=frozenset(used_keys),
             camera_only=self._camera_only,
             proof_origins=origins,
+            receipt_already_used=receipt_used,
             guardian_override=override,
         )
         return facts, verdict_row

@@ -19,6 +19,7 @@ from tests.capture_fakes import APP_ID, AppleDevice
 from tests.db.test_app_auth import login
 from tests.db.test_app_requests import JPEG, new_request
 from tests.db.world import AGENT_WALLET, AUSD, MINT, World
+from tests.images import png
 
 
 def b64(raw: bytes) -> str:
@@ -336,7 +337,7 @@ class TestIphoneCapture:
         assert refused.status_code == 409
 
 
-PNG_LIKE = b"\x89PNG\r\n\x1a\n" + b"second receipt" * 10
+PNG_LIKE = png(5)
 
 
 class TestCameraOnlyEngine:
