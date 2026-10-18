@@ -63,6 +63,122 @@ talks to the dependent or calls the engine.
 | **On a flag** | No money moves; the maker's code asks the guardian with both views (`POST /guardian-questions`) |
 | **On failure** | Any error, refusal, exhausted budget or unrecordable verdict counts as a flag |
 
+### Where the data lives
+
+The agent layer stores nothing. Each run reads a snapshot from the platform API; in this
+repo the platform is the in-memory mock, so all state is lost on restart.
+
+```mermaid
+flowchart LR
+    GW["Gateway / your app"]
+
+    subgraph AZ["Agent zone: stateless, no storage"]
+        direction TB
+        SVC["Agent service<br/>POST /v1/requests/{id}/process"]
+        MK["Maker agent"]
+        SNAP["AgentContext snapshot<br/>(in memory, one per run)"]
+        AU["Auditor agent"]
+        SVC --> MK
+        MK --> SNAP
+        SNAP -. "passed in-process (gap 1)" .-> AU
+    end
+
+    subgraph PL["Mock platform: in-memory, lost on restart"]
+        direction TB
+        POL["dependents[d].policy<br/>limits, guidance, version"]
+        BUD["dependents[d].spent_this_week<br/>delegated[g]"]
+        HIS["dependents[d].history[]<br/>transfer / blocked only"]
+        REQ["requests{} + proofs{}<br/>message, thread, already_sent"]
+        TX["transfers{}<br/>keyed by idempotency key"]
+        VER["verdicts{}"]
+        DEC["decisions[]"]
+        DEC -. "never becomes history (gap 2)" .-> HIS
+    end
+
+    GW -->|"process request"| SVC
+    MK -->|"GET /context"| POL
+    MK -->|"GET /context"| BUD
+    MK -->|"GET /context"| HIS
+    MK -->|"GET /requests, /proofs"| REQ
+    MK -->|"POST /transfers"| TX
+    AU -->|"POST /auditor/verdicts<br/>(auditor token)"| VER
+    MK -->|"POST /decisions"| DEC
+    TX -->|"engine updates on send"| BUD
+    TX -->|"engine appends"| HIS
+    TX -->|"engine bumps already_sent"| REQ
+```
+
+### One request, from start to finish
+
+The snapshot is read once at the start. The engine re-checks every transfer against its
+*current* state, which is what catches a freeze or policy change mid-run.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant GW as Gateway
+    participant MK as Maker (agent service)
+    participant LLM as Claude
+    participant AU as Auditor
+    participant PL as Platform API (mock engine)
+
+    GW->>MK: POST /v1/requests/r1/process
+    MK->>PL: GET /requests/r1
+    PL-->>MK: message, amount_requested, already_sent, thread, proof refs
+    MK->>PL: GET /dependents/d1/context
+    PL-->>MK: policy, budget, reservoir, frozen, history
+    MK->>PL: GET /proofs/{id} (max 3)
+    PL-->>MK: receipt text / image
+
+    Note over MK: Snapshot is read once.<br/>Input sanitised and delimited.
+
+    MK->>LLM: context + request + proofs
+    LLM-->>MK: request_transfer(amount, category, reasoning)
+    Note over MK: ToolGuard pre-checks against the snapshot<br/>(limits, budget, reservoir, proof, over-requested)
+
+    alt review triggers fire
+        MK->>AU: ReviewCase (snapshot passed in-process)
+        AU->>LLM: phase 1: raw case, no maker reasoning
+        LLM-->>AU: independent assessment
+        AU->>LLM: phase 2: maker's decision
+        LLM-->>AU: agree / flag
+        AU->>PL: POST /auditor/verdicts (auditor token)
+        PL-->>AU: verdict_id
+        AU-->>MK: verdict
+    end
+
+    alt Auditor flagged
+        MK->>PL: POST /guardian-questions (both views)
+        Note over MK,PL: No money moves
+    else cleared, or no review needed
+        MK->>PL: POST /transfers (idempotency key, verdict_id)
+        Note over PL: Re-checks the CURRENT state:<br/>version, freeze, limits, budget,<br/>reservoir, verdict binding
+        PL->>PL: update spent, delegation, history,<br/>already_sent, store by key
+        PL-->>MK: sent / duplicate / blocked
+    end
+
+    MK->>LLM: tool_result
+    LLM-->>MK: finish(outcome, reply)
+    Note over MK: Outcome reconciled with facts.<br/>Reply checked for leaks.
+    MK->>PL: POST /decisions (no tx link: gap 3)
+    MK-->>GW: DecisionRecord
+```
+
+### Known gaps
+
+1. **The Auditor doesn't fetch its own context.** It receives the maker's snapshot
+   in-process, so a compromised maker could feed it a doctored history or guidance. The
+   engine's limits still hold, but the intent check could be fooled. Fix: the Auditor
+   reads context with its own token.
+2. **History only records money events.** Declines and guardian questions are written
+   to `POST /decisions` but never appear in `history`, so the next run can't see them.
+   The real engine should build history from the decision log.
+3. **The decision record doesn't link to the transaction.** `DecisionRecord` lacks the
+   engine's `decision_id` and the `tx_signature` that the audit trail needs.
+4. **No guardian answers in threads.** `guardian_answer` messages exist in the contract,
+   but neither the mock nor its admin routes can add one, so "the guardian answered, now
+   continue" isn't testable end to end.
+
 ### Differences from the architecture doc
 
 - The model ends every run with `finish` (explicit outcome plus reply), so decisions are structured and loggable.
