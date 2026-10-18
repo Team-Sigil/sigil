@@ -245,6 +245,42 @@ _TEXTS: dict[str, dict[Locale, str]] = {
         "zh-Hans": "我问过你的 {n} 笔“{category}”类请求，你全部批准了（最大一笔 {top}）。",
         "zh-Hant": "我問過你的 {n} 筆「{category}」類請求，你全部批准了（最大一筆 {top}）。",
     },
+    # Policy interview (flows/policy_interview.py).
+    "interview.opening": {
+        "en": "Let's set up the allowance. Who is it for, and roughly how much should they get each week?",
+        "zh-Hans": "我们来设置零花钱吧。是给谁的？每周大概给多少？",
+        "zh-Hant": "我們來設定零用錢吧。是給誰的？每週大概給多少？",
+    },
+    "interview.ask_missing": {
+        "en": "A few more things before I can draft this: {items}. What would you like?",
+        "zh-Hans": "在起草之前还需要了解几件事：{items}。你希望怎么设置？",
+        "zh-Hant": "在起草之前還需要了解幾件事：{items}。你希望怎麼設定？",
+    },
+    "interview.confirm": {
+        "en": "I filled in a few things myself. Are these right?\n{items}",
+        "zh-Hans": "有几项是我自己补上的，这样可以吗？\n{items}",
+        "zh-Hant": "有幾項是我自己補上的，這樣可以嗎？\n{items}",
+    },
+    "interview.review": {
+        "en": "Here's how I would handle a few requests under this policy:\n{scenarios}\nAnything you'd change? If not, you can review and sign it.",
+        "zh-Hans": "按照这个规则，我会这样处理几个请求：\n{scenarios}\n有需要修改的吗？没有的话就可以查看并签署了。",
+        "zh-Hant": "按照這個規則，我會這樣處理幾個請求：\n{scenarios}\n有需要修改的嗎？沒有的話就可以檢視並簽署了。",
+    },
+    "interview.conflict": {
+        "en": "Some of these limits don't fit together: {errors}. Which would you like to change?",
+        "zh-Hans": "有几个限额互相冲突：{errors}。你想改哪一个？",
+        "zh-Hant": "有幾個限額互相衝突：{errors}。你想改哪一個？",
+    },
+    "interview.label.weekly_cap": {"en": "weekly budget", "zh-Hans": "每周预算", "zh-Hant": "每週預算"},
+    "interview.label.max_per_request": {"en": "most for one request", "zh-Hans": "单次最多", "zh-Hant": "單次最多"},
+    "interview.label.proof_threshold": {"en": "receipt needed from", "zh-Hans": "多少钱起需要收据", "zh-Hant": "多少錢起需要收據"},
+    "interview.label.blocked_categories": {"en": "never allowed", "zh-Hans": "绝对不允许的类别", "zh-Hant": "絕對不允許的類別"},
+    "interview.label.allowance": {"en": "regular allowance", "zh-Hans": "固定零花钱", "zh-Hant": "固定零用錢"},
+    "interview.label.review_threshold": {"en": "second check from", "zh-Hans": "多少钱起需要二次审核", "zh-Hant": "多少錢起需要二次審核"},
+    "interview.label.always_fine": {"en": "always fine", "zh-Hans": "总是可以的", "zh-Hant": "總是可以的"},
+    "interview.label.ask_first": {"en": "ask me first about", "zh-Hans": "需要先问我的", "zh-Hant": "需要先問我的"},
+    "interview.label.dependent_context": {"en": "about the dependent", "zh-Hans": "关于被照顾的人", "zh-Hant": "關於被照顧的人"},
+    "interview.label.emergencies": {"en": "emergencies", "zh-Hans": "紧急情况", "zh-Hant": "緊急情況"},
 }
 
 _CATEGORIES: dict[str, dict[Locale, str]] = {

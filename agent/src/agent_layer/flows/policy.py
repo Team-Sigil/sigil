@@ -47,6 +47,9 @@ class ChatTurn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     role: Literal["guardian", "agent"]
     text: str = Field(max_length=4_000)
+    # For agent turns in a policy interview: what the turn was (question_kind in the
+    # previous InterviewTurn). The gateway stores it and sends it back.
+    kind: Literal["question", "confirmation", "review"] | None = None
 
 
 @dataclass

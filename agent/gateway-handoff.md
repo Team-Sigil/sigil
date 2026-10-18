@@ -22,6 +22,7 @@ Proof and upload details are in [proof-images.md](proof-images.md).
 | 8 | [Daily request quota per dependent](#8-daily-request-quota-per-dependent) | P2 | No |
 | 9 | [Auditor read access to context](#9-auditor-read-access-to-context) | P3 | No |
 | 10 | [Link decisions to transfers](#10-link-decisions-to-transfers) | P3 | Maybe |
+| 11 | [Policy interview](#11-policy-interview) | P1 (new feature) | New inbound endpoints |
 
 Already done on your side, no action needed: history built from the decision log,
 signed guardian answers in the thread, `amount_requested` updated from the dependent's
@@ -181,6 +182,24 @@ or `tx_signature`, so the audit trail can't join a decision to its transfer dire
 The gateway already returns `decision_id` from `POST /decisions`. Options: the gateway
 links them by request and time, or the agent adds the transfer's `decision_id` to
 `DecisionRecord` (a contract change). Your call on which is simpler.
+
+## 11. Policy interview
+
+New: the agent can interview the guardian until the policy is complete, instead of
+drafting from one message. Protocol and examples: [policy-protocol.md](policy-protocol.md).
+The gateway's part:
+
+- Call `POST /v1/policy-interviews/turn` from `/guardian/chat` (or a new app route) with
+  the stored conversation; `GET /v1/policy-interviews/protocol` gives the checklist for
+  the app.
+- Store each agent turn with its `kind` (`question`, `confirmation`, `review`), and never
+  accept agent turns from the app: "ready" depends on the guardian answering a real
+  `review` turn.
+- Your `ChatTurn` in `agent_client.py` needs the optional `kind` field, and the client a
+  method for the new endpoint (same 180 s timeout, same `AgentUnavailableError` mapping).
+  `status: "unavailable"` is a normal `200`: show "try again".
+- On `ready`, run the existing draft → canonical body → signing flow on the returned
+  `draft`.
 
 ---
 

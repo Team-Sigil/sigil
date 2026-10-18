@@ -277,7 +277,7 @@ src/agent_layer/
   guardrails/       input, tools, output, budget
   maker/            system prompt, tool schemas, context builder, the agent loop
   auditor/          prompts, review triggers, the two-phase Auditor
-  flows/            scheduled actions (pace, reservoir, summary, learning) and policy drafting
+  flows/            scheduled actions (pace, reservoir, summary, learning), policy drafting and the policy interview
   scheduler.py      APScheduler jobs
   service.py        inbound HTTP API for the gateway
   sandbox.py        runtime isolation (audit hook)
@@ -330,7 +330,9 @@ open questions: [proof-images.md](proof-images.md).
 | Method | Path | |
 |---|---|---|
 | POST | `/v1/requests/{request_id}/process` | Run the maker on a dependent's request; returns the decision |
-| POST | `/v1/policy-drafts` | Draft a policy from the guardian's chat (the guardian signs; the agent never activates) |
+| POST | `/v1/policy-interviews/turn` | One turn of the policy interview: the agent's next question, the checklist and, when ready, the draft to sign. See [policy-protocol.md](policy-protocol.md) |
+| GET | `/v1/policy-interviews/protocol` | The interview's checklist, phases and labels (`?locale=`), for rendering progress |
+| POST | `/v1/policy-drafts` | One-shot draft from the guardian's chat, no questions (kept for compatibility; the guardian signs; the agent never activates) |
 | POST | `/v1/jobs/{allowance\|pace\|reservoir\|weekly_summary\|learning}` | Run a scheduled job now |
 
 All require `Authorization: Bearer $AGENT_INBOUND_TOKEN`; with no token configured, every

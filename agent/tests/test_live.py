@@ -70,3 +70,19 @@ def test_live_off_topic_plus_money_without_amount_asks(platform, live_agent, add
     record = live_agent.handle_request("r1")
     assert platform.sent == []
     assert record.outcome in (Outcome.ASKED_DEPENDENT, Outcome.DECLINED)
+
+
+def test_live_policy_interview_asks_until_complete(platform, maker_api):
+    from agent_layer.flows.policy import ChatTurn
+    from agent_layer.flows.policy_interview import InterviewRequest, interview_turn
+
+    body = InterviewRequest(guardian_id="g1", dependent_id="d1", conversation=[
+        ChatTurn(role="agent", text="Let's set up the allowance. Who is it for, and roughly how much each week?",
+                 kind="question"),
+        ChatTurn(role="guardian", text="It's for my daughter Mali, she's 15. Around 100 a week."),
+    ])
+    result = interview_turn(AnthropicLLM(), maker_api, body)
+    assert result.status == "needs_input" and result.phase == "gathering"
+    assert result.question  # it asks about what's still missing
+    statuses = {c.name: c.status for c in result.checklist}
+    assert statuses["weekly_cap"] == "stated" and statuses["ask_first"] in ("missing", "assumed")

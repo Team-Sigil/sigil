@@ -213,6 +213,15 @@ and wording may change, so don't build product logic on them. An empty list is n
 
 ## 4. Drafting a guardian's policy
 
+**Use the policy interview.** `POST /v1/policy-interviews/turn` lets the agent ask the
+guardian questions, one turn at a time, until the policy is complete enough to run, then
+shows test scenarios and returns a draft to sign. You store the conversation and send it
+on every turn. The full protocol, with examples and what your side must store, is in
+[policy-protocol.md](policy-protocol.md).
+
+The one-shot endpoint below is kept for compatibility: one call, one draft, no
+questions.
+
 ```
 POST /v1/policy-drafts
 ```

@@ -16,6 +16,8 @@ from agent_layer.auditor.auditor import Auditor
 from agent_layer.config import Settings
 from agent_layer.contracts import DecisionRecord, PolicyDraft, PolicyDraftValidation
 from agent_layer.flows.policy import ChatTurn, draft_policy
+from agent_layer.flows.policy_interview import InterviewRequest, InterviewTurn, interview_turn, protocol_description
+from agent_layer.i18n import DEFAULT_LOCALE, normalize_locale
 from agent_layer.llm import LLM, AnthropicLLM
 from agent_layer.maker.agent import MakerAgent
 from agent_layer.platform_api import AuditorAPI, MakerAPI, PlatformAPIError, ID_PATTERN
@@ -97,6 +99,19 @@ def create_app(runtime: AgentRuntime) -> FastAPI:
         except PlatformAPIError as exc:
             raise HTTPException(status_code=502, detail="platform API unavailable") from exc
         return PolicyDraftResponse(draft=result.draft, validation=result.validation)
+
+    @app.post("/v1/policy-interviews/turn", dependencies=[Depends(authorize)])
+    def policy_interview_turn(body: InterviewRequest) -> InterviewTurn:
+        """One turn of the policy interview: the gateway sends the whole conversation and
+        gets the agent's next question, the checklist and, when ready, the draft to sign."""
+        try:
+            return interview_turn(runtime.maker_llm, runtime.maker_api, body, limits=runtime.settings.limits)
+        except PlatformAPIError as exc:
+            raise HTTPException(status_code=502, detail="platform API unavailable") from exc
+
+    @app.get("/v1/policy-interviews/protocol", dependencies=[Depends(authorize)])
+    def policy_interview_protocol(locale: str | None = None) -> dict:
+        return protocol_description(normalize_locale(locale) or DEFAULT_LOCALE)
 
     @app.post("/v1/jobs/{name}", dependencies=[Depends(authorize)])
     def run_job(name: str) -> dict:
