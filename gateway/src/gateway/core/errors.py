@@ -22,6 +22,18 @@ class DomainError(Exception):
         super().__init__(self.message)
 
 
+class NotFoundError(DomainError):
+    code = "NOT_FOUND"
+    status = 404
+    message = "Not found."
+
+
+class ConflictError(DomainError):
+    code = "CONFLICT"
+    status = 409
+    message = "Conflicts with the current state."
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str

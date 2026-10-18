@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import (
 
 from gateway.db.models import Base, Family, User
 from gateway.enums import Role
+from tests.db.world import World, build_world
 
 REPO_DIR = Path(__file__).resolve().parents[2]
 ROOT_ENV = REPO_DIR / ".env"
@@ -125,3 +126,8 @@ async def family(sessionmaker: async_sessionmaker[AsyncSession]) -> Family:
         session.add(family)
         await session.commit()
         return family
+
+
+@pytest.fixture
+async def world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
+    return await build_world(sessionmaker)
