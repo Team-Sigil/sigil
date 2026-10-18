@@ -1,0 +1,46 @@
+"""Run the agent service: ``python -m agent_layer``.
+
+Environment: PLATFORM_API_URL, PLATFORM_MAKER_TOKEN, PLATFORM_AUDITOR_TOKEN,
+AGENT_INBOUND_TOKEN, ANTHROPIC_API_KEY (or another SDK credential source), and
+optionally AGENT_HOST / AGENT_PORT / AGENT_SCHEDULER=0.
+"""
+
+from __future__ import annotations
+
+import os
+from contextlib import asynccontextmanager
+from urllib.parse import urlparse
+
+import uvicorn
+
+from agent_layer.config import Settings
+from agent_layer.sandbox import install_sandbox
+from agent_layer.scheduler import build_scheduler
+from agent_layer.service import build_runtime, create_app
+
+
+def main() -> None:
+    settings = Settings.from_env()
+    platform_host = urlparse(settings.platform_base_url).hostname or ""
+    anthropic_host = urlparse(os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")).hostname or ""
+    install_sandbox(allowed_hosts=[platform_host, anthropic_host], allow_listen=True)
+
+    runtime = build_runtime(settings)
+    scheduler = build_scheduler(runtime.jobs) if os.environ.get("AGENT_SCHEDULER", "1") != "0" else None
+
+    app = create_app(runtime)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        if scheduler:
+            scheduler.start()
+        yield
+        if scheduler:
+            scheduler.shutdown(wait=False)
+
+    app.router.lifespan_context = lifespan
+    uvicorn.run(app, host=os.environ.get("AGENT_HOST", "127.0.0.1"), port=int(os.environ.get("AGENT_PORT", "8100")))
+
+
+if __name__ == "__main__":
+    main()
