@@ -49,6 +49,7 @@ POLICY = PolicyBody(
 
 @dataclass
 class FakeCrypto:
+    owner: str = ""  # set to the guardian's wallet by build_world
     delegate: str = AGENT_WALLET
     delegated: int = 500 * AUSD
     mode: str = "confirm"  # confirm | fail | unavailable
@@ -58,6 +59,7 @@ class FakeCrypto:
     async def get_delegation(self, token_account: str) -> Delegation:
         return Delegation(
             token_account=token_account,
+            owner=self.owner,
             delegate=self.delegate,
             delegated_amount_units=self.delegated,
         )
@@ -183,7 +185,7 @@ async def build_world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
         )
         await session.commit()
 
-    crypto = FakeCrypto()
+    crypto = FakeCrypto(owner=guardian_wallet)
     engine = TransferEngine(
         sessionmaker, crypto, agent_wallet=AGENT_WALLET, mint=MINT, clock=lambda: NOW
     )

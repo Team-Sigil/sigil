@@ -29,6 +29,7 @@ from gateway.contracts.crypto import (
     CryptoTransferRequest,
     CryptoTransferStatus,
     CryptoUnavailableError,
+    Delegation,
 )
 from gateway.contracts.policy import PolicyBody, policy_hash
 from gateway.contracts.signing import (
@@ -77,6 +78,14 @@ def allowance_key(dependent_id: str, now: datetime, timezone: str) -> str:
     """The agent layer's allowance idempotency key for the current ISO week."""
     year, week, _ = now.astimezone(ZoneInfo(timezone)).date().isocalendar()
     return f"allowance:{dependent_id}:{year}-W{week:02d}"
+
+
+def usable_delegation(delegation: Delegation, agent_wallet: str, guardian_wallet: str) -> int:
+    """What the agent wallet may spend: only from the guardian's own token account, and only
+    while the agent wallet is its delegate. Anything else counts as nothing."""
+    if delegation.owner != guardian_wallet or delegation.delegate != agent_wallet:
+        return 0
+    return delegation.delegated_amount_units
 
 
 def parse_uuid(value: str | None) -> uuid.UUID | None:
@@ -138,7 +147,7 @@ class TransferEngine:
                 )
             family = found.family
             # Network read before taking the lock, so no lock waits on the crypto layer.
-            delegated_remaining = await self._delegated_remaining(family.guardian_token_account)
+            delegated_remaining = await self._delegated_remaining(found)
 
             week = week_start(now, family.timezone)
             await session.execute(
@@ -231,15 +240,13 @@ class TransferEngine:
             return None
         return FamilyRow(family=row[0], guardian_wallet=row[1], dependent_wallet=row[2])
 
-    async def _delegated_remaining(self, token_account: str) -> int | None:
+    async def _delegated_remaining(self, found: FamilyRow) -> int | None:
         try:
-            delegation = await self._crypto.get_delegation(token_account)
+            delegation = await self._crypto.get_delegation(found.family.guardian_token_account)
         except CryptoUnavailableError:
             logger.warning("Delegation read failed; treating as no delegation")
             return None
-        if delegation.delegate != self._agent_wallet:
-            return 0
-        return delegation.delegated_amount_units
+        return usable_delegation(delegation, self._agent_wallet, found.guardian_wallet)
 
     async def _load_facts(
         self,

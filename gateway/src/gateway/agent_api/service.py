@@ -39,7 +39,7 @@ from gateway.db.models import (
     Transfer,
     User,
 )
-from gateway.engine.transfers import parse_uuid, week_start
+from gateway.engine.transfers import parse_uuid, usable_delegation, week_start
 from gateway.enums import (
     Audience,
     AuditEvent,
@@ -158,7 +158,7 @@ async def get_context(
 
     try:
         delegation = await crypto.get_delegation(family.guardian_token_account)
-        delegated = delegation.delegated_amount_units if delegation.delegate == agent_wallet else 0
+        delegated = usable_delegation(delegation, agent_wallet, members.guardian.wallet_address)
     except CryptoUnavailableError:
         logger.warning("Delegation read failed for the agent context; reporting 0")
         delegated = 0

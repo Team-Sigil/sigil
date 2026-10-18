@@ -42,11 +42,13 @@ class CryptoTransferResponse(BaseModel):
 
 
 class Delegation(BaseModel):
-    """The SPL delegation on the guardian's token account, read from chain."""
+    """The SPL token account and its delegation, read from chain. `owner` lets the engine
+    check the account really is the guardian's before spending from it."""
 
     model_config = ConfigDict(frozen=True)
 
     token_account: str = Field(max_length=44)
+    owner: str = Field(max_length=44)
     delegate: str | None = Field(default=None, max_length=44)
     delegated_amount_units: Annotated[int, Field(strict=True, ge=0)]
 

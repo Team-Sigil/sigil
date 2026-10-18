@@ -127,6 +127,16 @@ async def test_revoked_delegation_blocks(world: World) -> None:
     assert result.reason == "insufficient delegation"
 
 
+async def test_reservoir_not_owned_by_the_guardian_is_never_spent(world: World) -> None:
+    """A guardian who registers another family's delegated token account as their source gets
+    nothing: the engine only spends from an account the guardian owns."""
+    world.crypto.owner = wallet()
+    request = await world.add_request(10 * AUSD)
+    assert (await world.engine.submit(world.instruction(request))).reason == (
+        "insufficient delegation"
+    )
+
+
 async def test_skipping_the_auditor_is_refused(world: World) -> None:
     """SEC-06 / attack demo 5: a direct call without a verdict, for an emergency."""
     request = await world.add_request(10 * AUSD, emergency_claimed=True)
