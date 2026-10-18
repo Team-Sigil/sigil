@@ -57,8 +57,8 @@ A guardian (parent, family member) funds a reservoir in their own Phantom wallet
 
 | Layer | Choice |
 |---|---|
-| Web app | Next.js (App Router, TypeScript strict), Tailwind CSS |
-| Wallet | Solana wallet adapter + Phantom, **devnet only** (Phantom testnet mode) |
+| Mobile app | Native mobile app for iOS and Android (framework chosen by the app owner); receipts taken with the in-app camera and signed with an attested device key (Apple App Attest; Android key attestation + Play Integrity) |
+| Wallet | Phantom mobile, **devnet only** (Phantom testnet mode) |
 | Sign-in | Sign-In With Solana (Phantom `signIn`, fallback `signMessage`), JWT session |
 | Backend API | Python 3.12, FastAPI, Pydantic v2, Uvicorn |
 | LLM | Anthropic API (Claude), tool use; vision for receipts. Agent and Auditor are separate calls with separate prompts |
@@ -68,9 +68,9 @@ A guardian (parent, family member) funds a reservoir in their own Phantom wallet
 | Signer | Separate Python 3.12 FastAPI service; `solana` (solana-py incl. `spl.token`), `solders`, PyNaCl |
 | Chain | Solana devnet; own SPL test mint **aUSD**, 6 decimals |
 | Crypto utils | PyNaCl (ed25519 verify), `hmac`/`hashlib` stdlib |
-| Tests | pytest, pytest-asyncio; Playwright optional for web |
-| Lint/format | ruff + mypy (strict) for Python; ESLint + Prettier for TS |
-| Local dev | docker-compose: `postgres`, `api`, `signer`, `web` |
+| Tests | pytest, pytest-asyncio for Python; the app's own test tooling for mobile |
+| Lint/format | ruff + mypy (strict) for Python; the app's own linters for mobile |
+| Local dev | docker-compose: `postgres`, `migrate`, `mock-crypto`, `gateway` (gateway repo); the app runs on a device or simulator |
 
 Pin versions to latest stable at project start in `pyproject.toml` / `package.json`; do not upgrade majors mid-hackathon.
 
@@ -84,7 +84,7 @@ Pin versions to latest stable at project start in `pyproject.toml` / `package.js
 ├─ CLAUDE.md               ← imports SPEC.md for Claude Code
 ├─ docker-compose.yml
 ├─ .env.example
-├─ apps/web/               ← Dev A
+├─ apps/mobile/            ← Dev A
 │  └─ src/{app,components,lib/api,lib/wallet}
 ├─ services/api/           ← FastAPI backend
 │  ├─ app/main.py
@@ -104,7 +104,7 @@ Pin versions to latest stable at project start in `pyproject.toml` / `package.js
 
 | Dev | Owns | Delivers first (so others are unblocked) |
 |---|---|---|
-| A | Web app (guardian + dependent views, wallet connect, signing UX) | Pages against mocked API from `app/contracts` OpenAPI |
+| A | Mobile app (guardian + dependent views, Phantom wallet, signing UX, in-app receipt camera) | Screens against mocked API from `app/contracts` OpenAPI |
 | B | Agent, Auditor, prompts, tool handlers | Tool handlers calling a fake engine that returns fixed decisions |
 | C | Gateway, auth, engine, DB, audit log | Engine with full unit tests + DB migrations |
 | D | Signer, chain client, scheduler, scripts | Signer in `MOCK_CHAIN=true` mode returning fake tx signatures |
@@ -553,14 +553,14 @@ To change a default: `[SPEC]` PR updating this table.
 
 ## 18. Out of scope
 
-Mainnet, real fiat, KYC, multiple dependents/guardians, mobile native apps, push notifications, LINE/Telegram bots, on-chain spending-limit programs, KMS/HSM (mention as production path only).
+Mainnet, real fiat, KYC, multiple dependents/guardians, push notifications, LINE/Telegram bots, on-chain spending-limit programs, KMS/HSM (mention as production path only).
 
 ---
 
 ## 19. Definition of done (per PR)
 
 - Matches SPEC sections it touches; SPEC updated if contracts changed.
-- ruff, mypy (strict), ESLint pass; tests pass; new logic has tests; SEC tests untouched or strengthened.
+- ruff, mypy (strict) and the app's linters pass; tests pass; new logic has tests; SEC tests untouched or strengthened.
 - No secrets, no floats in money paths, no new tool fields that accept addresses.
 - PR description lists SPEC sections implemented (e.g. "Implements §9.2 checks 1–6").
 
@@ -583,3 +583,4 @@ Mainnet, real fiat, KYC, multiple dependents/guardians, mobile native apps, push
 | Date | Version | Change |
 |---|---|---|
 | 2026-10-17 | 1.0 | Initial spec from architecture doc |
+| 2026-10-18 | 1.0.1 | The client is a native mobile app (iOS, Android), not a web app: §3 stack, §4 layout and ownership, §18, §19; receipts use verified in-app capture |
