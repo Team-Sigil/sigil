@@ -163,17 +163,26 @@ class World:
             await session.commit()
             return request
 
-    async def add_proof(self, request: Request, content: bytes = b"receipt-photo") -> Proof:
+    async def add_proof(
+        self,
+        request: Request,
+        content: bytes = b"receipt-photo",
+        *,
+        source: str = "photo",
+        media_type: str = "image/jpeg",
+        derived_from: Proof | None = None,
+    ) -> Proof:
         async with self.sessionmaker() as session:
             proof = Proof(
                 request_id=request.id,
                 family_id=self.family.id,
                 kind="receipt",
-                media_type="image/jpeg",
+                media_type=media_type,
                 size_bytes=len(content),
                 content=content,
                 sha256=hashlib.sha256(content).hexdigest(),
-                source="photo",
+                source=source,
+                derived_from=derived_from.id if derived_from else None,
             )
             session.add(proof)
             await session.commit()

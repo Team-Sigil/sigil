@@ -6,7 +6,7 @@ app can retry with `POST /requests/{id}/process`.
 """
 
 import hashlib
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.agent_client import AgentDecision, AgentService
 from gateway.app_api.sessions import FamilyDependentDep, Member, MemberDep
+from gateway.capture.config import CaptureConfig
+from gateway.capture.service import verify_capture
 from gateway.contracts.app import Units
 from gateway.core.errors import ConflictError, DomainError, NotFoundError
 from gateway.db import audit_log
@@ -89,7 +91,9 @@ class ProofView(BaseModel):
     kind: str
     media_type: str
     size_bytes: int
+    source: str  # "photo" only for a verified in-app capture
     flags: list[str]
+    captured_at: datetime | None
     uploaded_at: datetime
 
 
@@ -126,7 +130,9 @@ def _proof_view(row: Proof) -> ProofView:
         kind=row.kind,
         media_type=row.media_type,
         size_bytes=row.size_bytes,
+        source=row.source,
         flags=list(row.flags),
+        captured_at=row.captured_at,
         uploaded_at=row.uploaded_at,
     )
 
@@ -232,6 +238,8 @@ async def upload_proof(
     session: SessionDep,
     file: Annotated[UploadFile, File()],
     kind: Annotated[str, Form(pattern="^(receipt|quote|photo)$")] = "receipt",
+    capture_claim: Annotated[str | None, Form(max_length=2_000)] = None,
+    capture_signature: Annotated[str | None, Form(max_length=4_000)] = None,
 ) -> UploadedProof:
     row = await family_request(session, dependent, request_id)
     count = await session.scalar(select(func.count()).where(Proof.request_id == row.id))
@@ -242,8 +250,23 @@ async def upload_proof(
     if len(data) > MAX_PROOF_BYTES:
         raise PayloadTooLargeError()
     media_type = sniff_image(data)
-    # Uploads are never a verified in-app capture ("photo"); typed text is only a claim.
+    # A plain upload is a "file"; typed text is only a claim; "photo" needs a verified capture.
     source = "file"
+    verified = None
+    if media_type is not None and capture_claim and capture_signature:
+        config: CaptureConfig = request.app.state.capture
+        verified = await verify_capture(
+            session,
+            config,
+            dependent.user,
+            row,
+            data,
+            capture_claim,
+            capture_signature,
+            datetime.now(UTC),
+        )
+        if verified is not None:
+            source = "photo"
     if media_type is None:
         if not (file.content_type or "").startswith("text/plain") or not data:
             raise UnsupportedProofError()
@@ -266,7 +289,9 @@ async def upload_proof(
         content=data,
         sha256=digest,
         source=source,
-        flags=["duplicate"] if seen else [],
+        flags=(["duplicate"] if seen else []) + (["camera_signed"] if verified else []),
+        device_id=verified.device_id if verified else None,
+        captured_at=verified.captured_at if verified else None,
     )
     session.add(proof)
     await session.flush()
@@ -275,7 +300,7 @@ async def upload_proof(
         session,
         dependent.family.id,
         AuditEvent.PROOF_UPLOADED,
-        {"request_id": str(row.id), "proof_id": str(proof.id), "sha256": digest},
+        {"request_id": str(row.id), "proof_id": str(proof.id), "sha256": digest, "source": source},
     )
     await session.commit()
     return UploadedProof(proof=_proof_view(proof), decision=await run_agent(request, str(row.id)))

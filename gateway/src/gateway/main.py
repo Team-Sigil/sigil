@@ -7,11 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from gateway.agent_api.routes import router as agent_router
 from gateway.agent_client import AgentService, HttpAgentClient
 from gateway.app_api.auth import router as auth_router
+from gateway.app_api.capture import router as capture_router
 from gateway.app_api.families import router as families_router
 from gateway.app_api.guardian import router as guardian_router
 from gateway.app_api.policy import router as policy_router
 from gateway.app_api.reads import router as reads_router
 from gateway.app_api.requests import router as requests_router
+from gateway.capture.config import CaptureConfig, capture_config
+from gateway.capture.play_integrity import GooglePlayIntegrity
 from gateway.contracts.crypto import CryptoClient
 from gateway.core.config import Settings, get_settings
 from gateway.core.errors import install_error_handlers
@@ -29,6 +32,7 @@ def create_app(
     sessionmaker: async_sessionmaker[AsyncSession] | None = None,
     crypto: CryptoClient | None = None,
     agent: AgentService | None = None,
+    capture: CaptureConfig | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.secret_values())
@@ -44,6 +48,7 @@ def create_app(
             settings.agent_url, settings.agent_inbound_token.get_secret_value()
         )
         agent = owned_agent
+    capture = capture or capture_config(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -52,6 +57,8 @@ def create_app(
             await owned_crypto.aclose()
         if owned_agent is not None:
             await owned_agent.aclose()
+        if isinstance(capture.integrity, GooglePlayIntegrity):
+            await capture.integrity.aclose()
 
     app = FastAPI(title="Sigil gateway", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
@@ -59,11 +66,13 @@ def create_app(
     app.state.crypto = crypto
     app.state.agent = agent
     app.state.events = EventBus()
+    app.state.capture = capture
     app.state.engine = TransferEngine(
         sessionmaker,
         crypto,
         agent_wallet=settings.agent_wallet_pubkey,
         mint=settings.ausd_mint,
+        camera_only=settings.camera_only_proofs,
     )
     install_error_handlers(app)
     app.include_router(agent_router)
@@ -73,6 +82,7 @@ def create_app(
     app.include_router(requests_router)
     app.include_router(guardian_router)
     app.include_router(reads_router)
+    app.include_router(capture_router)
     # Added last so they run first: size, then rate, before any route work.
     app.add_middleware(RateLimitMiddleware, per_minute=settings.rate_limit_per_min)
     app.add_middleware(BodyLimitMiddleware)

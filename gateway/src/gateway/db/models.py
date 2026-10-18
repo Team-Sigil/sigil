@@ -37,6 +37,7 @@ from gateway.core.config import get_settings
 from gateway.core.crypto import decrypt, encrypt
 from gateway.enums import (
     Audience,
+    DevicePlatform,
     GuardianDecision,
     NoncePurpose,
     PolicyStatus,
@@ -255,12 +256,47 @@ class Proof(Base):
     source: Mapped[str] = mapped_column(String(16))  # photo | file | ocr | typed
     derived_from: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("proofs.id"))
     flags: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
+    # Set only for a verified in-app capture (source "photo").
+    device_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("capture_devices.id"))
+    captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     uploaded_at: Mapped[datetime] = created_at()
 
     __table_args__ = (
         CheckConstraint("size_bytes >= 0", name="size_non_negative"),
         Index("ix_proofs_family_sha256", "family_id", "sha256"),
     )
+
+
+class CaptureDevice(Base):
+    """A dependent's phone with an attested hardware key (Apple App Attest, or Android key
+    attestation plus Play Integrity). Only its signed captures become `source: "photo"`."""
+
+    __tablename__ = "capture_devices"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    family_id: Mapped[uuid.UUID] = family_fk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    platform: Mapped[DevicePlatform] = mapped_column(str_enum(DevicePlatform, "device_platform"))
+    # iOS: base64 of App Attest's key id. Android: hex SHA-256 of the public key.
+    key_id: Mapped[str] = mapped_column(String(100), unique=True)
+    public_key: Mapped[bytes] = mapped_column(LargeBinary)  # SubjectPublicKeyInfo DER
+    counter: Mapped[int] = mapped_column(BigInteger, server_default="0")  # App Attest only
+    security_level: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = created_at()
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CaptureTicket(Base):
+    """A single-use, 5-minute nonce for one capture on one request with one device."""
+
+    __tablename__ = "capture_tickets"
+
+    nonce: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("requests.id"))
+    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("capture_devices.id"))
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class UsedProofKey(Base):

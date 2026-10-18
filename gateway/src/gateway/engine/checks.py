@@ -51,6 +51,9 @@ class TransferFacts:
     verdict: VerdictFacts | None = None
     proofs: list[Proof | None] = field(default_factory=list)
     used_proof_keys: frozenset[str] = frozenset()
+    # Verified-capture mode (CAMERA_ONLY_PROOFS), and the photos OCR proofs were read from.
+    camera_only: bool = False
+    proof_origins: dict[str, Proof] = field(default_factory=dict)
     # Set only when a wallet-signed guardian approval of exactly this amount for this request
     # was found and verified (SPEC SEC-05). Lets the transfer past the amount cap, the weekly
     # cap and the Auditor requirement; never past anything else.
@@ -151,13 +154,17 @@ def _proof_failure(facts: TransferFacts, policy: PolicyBody) -> str | None:
     if t.trigger != "request" or t.amount < policy.proof_threshold:
         return None
 
+    def counts(p: Proof) -> bool:
+        origin = facts.proof_origins.get(p.derived_from) if p.derived_from else None
+        return counts_as_proof(p, camera_only=facts.camera_only, origin=origin)
+
     usable = [
         p
         for p in proofs
-        if counts_as_proof(p) and not set(proof_keys(p, t.proof_findings)) & facts.used_proof_keys
+        if counts(p) and not set(proof_keys(p, t.proof_findings)) & facts.used_proof_keys
     ]
     if not usable:
-        return "proof already used" if any(counts_as_proof(p) for p in proofs) else "proof required"
+        return "proof already used" if any(counts(p) for p in proofs) else "proof required"
     findings = t.proof_findings
     if findings is None or not findings.matches_claim or findings.total < t.amount:
         return "proof does not cover the transfer"

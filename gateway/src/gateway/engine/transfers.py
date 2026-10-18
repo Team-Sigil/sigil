@@ -112,12 +112,14 @@ class TransferEngine:
         *,
         agent_wallet: str,
         mint: str,
+        camera_only: bool = False,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._sessionmaker = sessionmaker
         self._crypto = crypto
         self._agent_wallet = agent_wallet
         self._mint = mint
+        self._camera_only = camera_only
         self._clock = clock
 
     async def submit(self, t: TransferInstruction) -> TransferResult:
@@ -327,6 +329,18 @@ class TransferEngine:
                 )
             proofs.append(to_agent_proof(row, dependent_id, with_content=False) if row else None)
 
+        origins = {}
+        for proof in proofs:
+            origin_uuid = parse_uuid(proof.derived_from) if proof else None
+            if origin_uuid is not None:
+                origin = await session.scalar(
+                    select(Proof).where(Proof.id == origin_uuid, Proof.family_id == family.id)
+                )
+                if origin is not None:
+                    origins[str(origin.id)] = to_agent_proof(
+                        origin, dependent_id, with_content=False
+                    )
+
         used_keys = await session.scalars(
             select(UsedProofKey.key).where(UsedProofKey.family_id == family.id)
         )
@@ -352,6 +366,8 @@ class TransferEngine:
             verdict=verdict_facts,
             proofs=proofs,
             used_proof_keys=frozenset(used_keys),
+            camera_only=self._camera_only,
+            proof_origins=origins,
             guardian_override=override,
         )
         return facts, verdict_row

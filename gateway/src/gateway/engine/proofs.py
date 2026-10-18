@@ -8,12 +8,27 @@ import re
 from gateway.contracts.agent import PROOF_FLAGS_DISQUALIFYING, Proof, ProofFindingsRecord
 
 
-def counts_as_proof(proof: Proof) -> bool:
+def counts_as_proof(
+    proof: Proof, *, camera_only: bool = False, origin: Proof | None = None
+) -> bool:
     """An image, or text the platform extracted from one; never typed text, a duplicate or an
-    AI-generated image."""
+    AI-generated image. With `camera_only`, only a verified in-app capture (`source: "photo"`),
+    or OCR text read from one on the same request (`origin`)."""
     if set(proof.flags) & PROOF_FLAGS_DISQUALIFYING or proof.source == "typed":
         return False
-    return proof.media_type.startswith("image/") or proof.source == "ocr"
+    is_image = proof.media_type.startswith("image/")
+    if not (is_image or proof.source == "ocr"):
+        return False
+    if not camera_only:
+        return True
+    if is_image:
+        return proof.source == "photo"
+    return (
+        origin is not None
+        and origin.source == "photo"
+        and origin.request_id == proof.request_id
+        and not set(origin.flags) & PROOF_FLAGS_DISQUALIFYING
+    )
 
 
 def receipt_fingerprint(findings: ProofFindingsRecord) -> str:
