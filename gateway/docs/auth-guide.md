@@ -12,15 +12,26 @@ multi-dependent changes are in [app-handoff.md](app-handoff.md).
 There are no passwords. The user proves they own a Solana wallet by signing a one-time text
 with Phantom, and the gateway checks the signature.
 
-```
-iOS app                     Gateway                         Phantom
-   │ POST /auth/nonce {wallet} ──▶ creates a single-use nonce
-   │ ◀── {nonce, message, expires_at}
-   │ signMessage(message) ─────────────────────────────────▶ user approves
-   │ ◀────────────────────────────────────────── signature (base58)
-   │ POST /auth/verify {wallet, message, signature_b58} ──▶ checks it
-   │ ◀── {token, role, family_id, family_ids}
-   │ Authorization: Bearer <token> on every later call
+```mermaid
+sequenceDiagram
+    actor iOS as iOS App
+    participant Gateway
+    participant Phantom
+
+    iOS->>Gateway: POST /auth/nonce {wallet}
+    Note over Gateway: Create a single-use nonce
+    Gateway-->>iOS: {nonce, message, expires_at}
+
+    iOS->>Phantom: signMessage(message)
+    Note over Phantom: User approves signing
+    Phantom-->>iOS: signature (base58)
+
+    iOS->>Gateway: POST /auth/verify {wallet, message, signature_b58}
+    Note over Gateway: Verify signature and nonce
+    Gateway-->>iOS: {token, role, family_id, family_ids}
+
+    Note over iOS,Gateway: Include on every subsequent API call
+    iOS->>Gateway: Authorization: Bearer #lt;token#gt;
 ```
 
 The message the gateway builds looks like this:
