@@ -9,6 +9,7 @@ description = "Gateway layer of the Sigil delegated financial guardianship platf
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.0",
+    "asn1crypto>=1.5.1",
     "base58>=2.1.1",
     "cbor2>=6.1.5",
     "cryptography>=50.0.2",

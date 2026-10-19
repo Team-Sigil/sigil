@@ -67,11 +67,17 @@ async def load_history(
 
 
 def to_agent_proof(row: ProofRow, dependent_id: str, with_content: bool) -> Proof:
-    """A stored proof with its integrity metadata. Content is included only for GET /proofs."""
+    """A stored proof with its integrity metadata. Content is included only for GET /proofs.
+
+    An unsigned PDF is the one case where the content is withheld: nothing ties it to the
+    shop it claims to come from, so the model is told it exists and never shown it
+    (SPEC §8.9).
+    """
     is_text = row.media_type.startswith("text/")
+    unsigned_document = row.media_type == "application/pdf" and "issuer_signed" not in row.flags
     data_b64 = None
     text = None
-    if with_content:
+    if with_content and not unsigned_document:
         if is_text:
             text = row.content.decode()
         else:

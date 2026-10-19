@@ -1,6 +1,8 @@
-from functools import lru_cache
+from functools import cached_property, lru_cache
+from pathlib import Path
 from typing import Self
 
+from cryptography.x509 import Certificate, load_pem_x509_certificate
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -42,6 +44,29 @@ class Settings(BaseSettings):
     apple_app_attest_production: bool = True
     # Only verified captures count as proof; must match the agent's AGENT_CAMERA_ONLY_PROOFS.
     camera_only_proofs: bool = False
+
+    # Signed PDF receipts from online orders. A PDF counts as proof only when its signature
+    # verifies against one of these roots and names one of these shops; without roots, no
+    # PDF ever counts. PEM file holding the issuing certificate(s), and a comma-separated
+    # list of accepted signer names.
+    pdf_trusted_roots_path: Path | None = None
+    pdf_allowed_signers: str = "Lazada"
+
+    @property
+    def allowed_pdf_signers(self) -> list[str]:
+        return [name.strip() for name in self.pdf_allowed_signers.split(",") if name.strip()]
+
+    @cached_property
+    def pdf_trusted_roots(self) -> list[Certificate]:
+        """The certificates that may issue a receipt-signing certificate."""
+        if self.pdf_trusted_roots_path is None:
+            return []
+        data = self.pdf_trusted_roots_path.read_bytes()
+        return [
+            load_pem_x509_certificate(block + b"-----END CERTIFICATE-----\n")
+            for block in data.split(b"-----END CERTIFICATE-----")
+            if b"BEGIN CERTIFICATE" in block
+        ]
 
     # How often pending transfers (crypto layer down at send time) are retried by their key.
     pending_retry_seconds: int = Field(default=60, gt=0)

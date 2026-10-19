@@ -7,6 +7,7 @@ app can retry with `POST /requests/{id}/process`.
 
 import asyncio
 import hashlib
+import logging
 from datetime import UTC, datetime
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -30,6 +31,8 @@ from gateway.db.session import SessionDep
 from gateway.engine.transfers import has_open_obligation, parse_uuid
 from gateway.enums import AuditEvent, Role, ThreadRole
 from gateway.proof_images import NEAR_DUPLICATE_BITS, ImageRejectedError, hamming, normalise
+from gateway.proof_pdf import PdfSignatureError, SignedPdf
+from gateway.proof_pdf import verify as verify_pdf
 
 router = APIRouter(prefix="/api/v1/requests", tags=["requests"])
 
@@ -37,6 +40,8 @@ MAX_MESSAGE_CHARS = 2_000
 MAX_PROOF_BYTES = 15 * 1024 * 1024  # raw upload; the stored copy is normalised to <= 3.75 MB
 MAX_PROOFS_PER_REQUEST = 3  # the agent reads the first 3; more would be silently ignored
 PDF_MAGIC = b"%PDF-"  # an online order's receipt; typed from the bytes, never Content-Type
+
+logger = logging.getLogger(__name__)
 LIST_LIMIT = 50
 
 
@@ -295,13 +300,23 @@ async def upload_proof(
 
     if data.startswith(PDF_MAGIC):
         # An online order's receipt, which cannot be photographed. Typed from the bytes,
-        # never the Content-Type. Stored as uploaded: whether the PDF is a genuine order
-        # confirmation is not checked yet, so it carries `unchecked_document` and counts
-        # as proof only once something reads it (SPEC §8.9).
+        # never the Content-Type. A photo is tied to reality by App Attest; a PDF is tied
+        # to it only by the shop's signature, so an unsigned one is stored but never shown
+        # to the model as evidence (SPEC §8.9).
         digest = hashlib.sha256(data).hexdigest()
         seen = await session.scalar(
             select(Proof.id).where(Proof.family_id.in_(sibling_families), Proof.sha256 == digest)
         )
+        settings: Settings = request.app.state.settings
+        signed: SignedPdf | None = None
+        try:
+            signed = verify_pdf(
+                data,
+                trusted_roots=settings.pdf_trusted_roots,
+                allowed_signers=settings.allowed_pdf_signers,
+            )
+        except PdfSignatureError as exc:
+            logger.info("pdf proof refused: %s", exc)
         proof = Proof(
             request_id=row.id,
             family_id=family_id,
@@ -313,9 +328,11 @@ async def upload_proof(
             original=data,
             original_sha256=digest,
             # `source` stays "file": its values are fixed by the shared agent contract,
-            # so a PDF is told apart by its media type and the flag below.
+            # so a PDF is told apart by its media type and the flags below.
             source="file",
-            flags=(["duplicate"] if seen else []) + ["unchecked_document"],
+            flags=(["duplicate"] if seen else [])
+            + (["issuer_signed"] if signed else ["unchecked_document"]),
+            captured_at=signed.signed_at if signed else None,
         )
     elif (file.content_type or "").startswith("text/plain"):
         # Typed text is the dependent's claim, never evidence.

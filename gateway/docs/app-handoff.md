@@ -102,8 +102,10 @@ receipt. Until it arrives, `POST /requests` returns `409 PROOF_OUTSTANDING`.
 - Two ways to show it: the **in-app camera** with an App Attest capture claim, as before,
   or, for an online order that cannot be photographed, the **PDF receipt** from the order
   confirmation. Still no gallery picker and no screenshots.
-- A PDF is accepted and stored, flagged `unchecked_document`: whether the document is a
-  genuine order confirmation is not checked yet.
+- The gateway checks the shop's digital signature on the PDF. One that verifies is flagged
+  `issuer_signed` and counts like a photo; one that does not is flagged
+  `unchecked_document`, is never shown to the agent and settles nothing — so tell the
+  dependent it was not accepted rather than leaving them waiting.
 - The block lifts only once the agent has read the proof and the gateway has accepted it,
   so show the owed receipt as a task the dependent has to clear, not as a passing message.
 

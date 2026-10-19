@@ -308,8 +308,7 @@ nonce:{nonce}
 
 **Proofs.** A JPEG, PNG or WebP image (typed from its bytes, not the `Content-Type`; send
 iPhone photos as JPEG, not HEIC; at least 200 px), a **PDF** (an online order's receipt,
-which cannot be photographed; stored as uploaded and flagged `unchecked_document`, because
-whether the document is genuine is not checked yet), or plain text (stored as the
+which cannot be photographed — see "Signed PDF receipts"), or plain text (stored as the
 dependent's claim, never as evidence). Up to 15 MB as uploaded and 3 per request. The gateway applies
 the EXIF rotation, strips all metadata (GPS included) by re-encoding, limits the long edge to
 2,576 px and keeps the stored copy under 3.75 MB; the agent only sees that copy, and the
@@ -318,6 +317,17 @@ any of the guardian's dependents), `near_duplicate` (perceptually the same pictu
 `old_capture` (taken over 30 days ago), `edited` (editing software in the metadata) and
 `camera_signed` (verified capture). Flags only make the agent more careful. A plain upload is
 `source: "file"`; only a verified in-app capture (below) is `"photo"`.
+
+**Signed PDF receipts.** A photo is tied to reality by App Attest; a PDF only by the
+shop's own signature over it. At upload the gateway verifies any embedded signature
+(`proof_pdf.py`): the `/ByteRange` must cover the whole file but the signature's own hole,
+the signed digest must match the bytes, the signing certificate must chain to one of
+`PDF_TRUSTED_ROOTS_PATH` and must be in date, and its name must match
+`PDF_ALLOWED_SIGNERS` (Lazada today). A PDF that passes is flagged `issuer_signed` and is
+evidence like a photo; one that does not is flagged `unchecked_document`, **is never shown
+to the model** and settles no obligation. With no roots configured, no PDF counts. A valid
+signature proves the file came from that shop unchanged — not that the order is this
+dependent's or for the amount asked, which the findings and the engine still decide.
 
 **Verified in-app capture (iOS).** Follows the agent layer's design (`proof-images.md`,
 "Verified in-app capture") with Apple App Attest. Receipts are taken with the app's own

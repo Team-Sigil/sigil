@@ -180,9 +180,10 @@ class TestOnlineOrders:
         )
         assert response.status_code == 422
 
-    async def test_a_pdf_settles_an_obligation(
+    async def test_an_unsigned_pdf_does_not_settle_the_debt(
         self, app_client: httpx.AsyncClient, world: World
     ) -> None:
+        """It is stored, but nothing ties it to the shop, so it is not evidence."""
         headers = await login(app_client, world.dependent_key)
         request = await world.add_request(30 * AUSD)
         await world.engine.submit(world.instruction(request, amount=30 * AUSD))
@@ -191,6 +192,23 @@ class TestOnlineOrders:
         uploaded = await upload(
             app_client, headers, str(request.id), PDF, content_type="application/pdf"
         )
+        response = await TestSettling().settle(
+            app_client, obligation, uploaded.json()["proof"]["id"]
+        )
+        assert response.json() == {"settled": False, "reason": "not usable as proof"}
+
+    async def test_a_signed_pdf_settles_an_obligation(
+        self, app_client: httpx.AsyncClient, world: World, signed_receipt: bytes
+    ) -> None:
+        headers = await login(app_client, world.dependent_key)
+        request = await world.add_request(30 * AUSD)
+        await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        obligation = await open_obligation(world)
+
+        uploaded = await upload(
+            app_client, headers, str(request.id), signed_receipt, content_type="application/pdf"
+        )
+        assert "issuer_signed" in uploaded.json()["proof"]["flags"]
         response = await TestSettling().settle(
             app_client, obligation, uploaded.json()["proof"]["id"]
         )

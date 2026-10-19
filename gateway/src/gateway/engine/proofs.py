@@ -13,11 +13,15 @@ from gateway.contracts.agent import PROOF_FLAGS_DISQUALIFYING, Proof, ProofFindi
 def counts_as_proof(
     proof: Proof, *, camera_only: bool = False, origin: Proof | None = None
 ) -> bool:
-    """An image, or text the platform extracted from one; never typed text, a duplicate or an
-    AI-generated image. With `camera_only`, only a verified in-app capture (`source: "photo"`),
-    or OCR text read from one on the same request (`origin`)."""
+    """An image, text the platform extracted from one, or a PDF the shop signed; never typed
+    text, a duplicate or an AI-generated image. With `camera_only`, only a verified in-app
+    capture (`source: "photo"`), or OCR text read from one on the same request (`origin`)."""
     if set(proof.flags) & PROOF_FLAGS_DISQUALIFYING or proof.source == "typed":
         return False
+    if proof.media_type == "application/pdf":
+        # An online order's receipt stands on the shop's signature alone: an unsigned PDF
+        # is anything anyone could type, so it never counts (SPEC §8.9).
+        return "issuer_signed" in proof.flags
     is_image = proof.media_type.startswith("image/")
     if not (is_image or proof.source == "ocr"):
         return False

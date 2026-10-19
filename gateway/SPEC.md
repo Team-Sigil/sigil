@@ -6,7 +6,7 @@
 > invent: use the decision in §15, or add an entry there and ask a human.
 
 - Project: FinTechathon 2026 entry (theme: AI as a Financial Participant)
-- Version: 2.1 (see §19)
+- Version: 2.2 (see §19)
 - Security weighs 30% of judging. Requirements tagged `SEC-xx` (§13) are non-negotiable.
 
 ---
@@ -322,8 +322,9 @@ engine". These invariants hold:
    to the request and whose findings cover the amount — the gateway decides, never the
    agent's say-so. A receipt backs one transfer: across the guardian's dependents (id, file
    hash, fingerprint) and across all families (keyed fingerprint). Receipts for online
-   orders arrive as PDFs, which are accepted and stored but **not yet checked for being
-   genuine**.
+   orders arrive as PDFs: the gateway verifies the shop's signature over the file and only
+   a PDF that verifies against a trusted root and an accepted shop counts as proof or
+   reaches the model. An unsigned one is stored and ignored.
 10. **Transaction.** Reserve, record and spend verdicts and proofs in one commit under the
     locks; call the crypto layer outside any lock; settle on a definite answer; keep
     `pending` and retry on an unknown one (SEC-07, SEC-08).
@@ -485,7 +486,7 @@ gateway; the engine re-verifies approvals on every transfer.
 | Allowance cap | The signed allowance amount; raising it needs the guardian |
 | Guardian override scope | Exactly the signed amount, past the amount cap, weekly cap and review only |
 | Sign-in method | Phantom `signMessage` over the gateway's text (not Phantom `signIn`) |
-| Receipts | In-app camera with App Attest, or a PDF for an online order; with `CAMERA_ONLY_PROOFS`, only verified captures count among images |
+| Receipts | In-app camera with App Attest, or a signed PDF for an online order (verified against `PDF_TRUSTED_ROOTS_PATH` and `PDF_ALLOWED_SIGNERS`); with `CAMERA_ONLY_PROOFS`, only verified captures count among images |
 | When proof is needed | After payment: money goes out first, the receipt is owed, and no further request is served until it arrives |
 | Custodial fallback | Not implemented |
 
@@ -547,3 +548,4 @@ or address fields; the commit or PR says which sections it implements.
 | 2026-10-19 | 1.0.4 | The signer also checks the source token account; `registered_destinations` exposes it |
 | 2026-10-19 | 2.0 | Rewritten for the four-service split. This repo's docs are the project's single source of truth (§0). The policy schema, categories, outcomes, interfaces, engine, data model and agent behaviour now match what is built; signer idempotency comes before its caps; sign-in uses `signMessage`; the SEC table has owners and status |
 | 2026-10-19 | 2.1 | Proof comes after payment: a request at or above `proof_threshold` is sent first and owes a receipt, which blocks further requests until settled; PDF receipts accepted for online orders (not yet checked) |
+| 2026-10-19 | 2.2 | PDF receipts from online orders are accepted only when the shop's signature over the file verifies; an unsigned PDF is stored but never reaches the model |

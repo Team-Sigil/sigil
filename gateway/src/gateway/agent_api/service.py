@@ -637,8 +637,8 @@ async def settle_obligation(
         select(UsedProofKey.key).where(UsedProofKey.guardian_user_id == family.guardian_user_id)
     )
     proof = to_agent_proof(proof_row, str(family.dependent_user_id), with_content=False)
-    is_document = proof_row.media_type == "application/pdf"
-    if not is_document and not counts_as_proof(proof):
+    if not counts_as_proof(proof):
+        # An unsigned PDF lands here too: it is stored, but it settles nothing.
         return SettledObligation(settled=False, reason="not usable as proof")
     if set(proof_keys(proof, findings)) & set(used):
         return SettledObligation(settled=False, reason="proof already used")

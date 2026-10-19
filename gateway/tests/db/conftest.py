@@ -26,6 +26,7 @@ from gateway.core.config import Settings
 from gateway.db.models import Base, Family, User
 from gateway.enums import Role
 from gateway.main import create_app
+from tests import signed_pdf
 from tests.db.world import AGENT_WALLET, MINT, World, build_world
 
 REPO_DIR = Path(__file__).resolve().parents[2]
@@ -136,10 +137,32 @@ async def world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
     return await build_world(sessionmaker)
 
 
+@pytest.fixture(scope="session")
+def receipt_root(tmp_path_factory: pytest.TempPathFactory) -> tuple[signed_pdf.Issued, Path]:
+    """A throwaway certificate that stands in for the shop's receipt-signing root."""
+    issued = signed_pdf.root()
+    path = tmp_path_factory.mktemp("pdf") / "roots.pem"
+    path.write_bytes(signed_pdf.roots_pem(issued.certificate))
+    return issued, path
+
+
 @pytest.fixture
-async def app_client(world: World) -> AsyncIterator[httpx.AsyncClient]:
+def signed_receipt(receipt_root: tuple[signed_pdf.Issued, Path]) -> bytes:
+    """A PDF receipt signed by a certificate the gateway is configured to trust."""
+    issued, _ = receipt_root
+    return signed_pdf.build(signed_pdf.signer(issued))
+
+
+@pytest.fixture
+async def app_client(
+    world: World, receipt_root: tuple[signed_pdf.Issued, Path]
+) -> AsyncIterator[httpx.AsyncClient]:
     """The whole gateway app on the test database, with the world's fake crypto layer."""
-    settings = Settings(agent_wallet_pubkey=AGENT_WALLET, ausd_mint=MINT)
+    settings = Settings(
+        agent_wallet_pubkey=AGENT_WALLET,
+        ausd_mint=MINT,
+        pdf_trusted_roots_path=receipt_root[1],
+    )
     app = create_app(
         settings=settings,
         sessionmaker=world.sessionmaker,
