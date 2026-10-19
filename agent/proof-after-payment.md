@@ -1,10 +1,20 @@
-# Proposal: proof after payment, end to end
+# Proof after payment, end to end
 
-For the team (gateway and agent layers). Status: **proposal, needs agreement.** The gateway
-already implements "proof after payment" (SPEC 2.1, §8.9); the agent layer doesn't use it
-yet, because the contract gives it no way to see or settle an owed receipt. This note
-proposes the missing contract, the agent's behaviour, and three safeguards, and lists the
-decisions we need.
+For the team (gateway and agent layers). Status: **built (SPEC 2.5, 2026-10-20)**, with
+these decisions:
+
+| Decision | Taken |
+|---|---|
+| 1. Pay first or proof first | Pay first by default; proof first stays possible when something already exists to show |
+| 2. S1 | Every pay-first payment is reviewed (trusted trigger `pay_first`, in the engine and the agent) |
+| How many owed receipts | Up to **3** (`MAX_OPEN_OBLIGATIONS` in the gateway, `max_proofs_owed` in the contract); at 3, requests get no more money |
+| 3. S2, 4. S3 | Not built yet: overdue receipts aren't reported and can't be waived |
+
+The contract below landed as proposed (`ProofOwed`, `proofs_owed` and `max_proofs_owed` on
+the context, `proof_owed` on the request and the transfer result, `SettleObligation`,
+`SettledObligation`, outcomes `receipt_accepted` / `receipt_rejected`). The "settle run" is
+the maker's receipt mode, with the `report_receipt` tool. The rest of this note is the
+original proposal, kept as the design record.
 
 ## What the gateway does today
 

@@ -6,6 +6,7 @@ import pytest
 from gateway.contracts.agent import HistoryItem, Proof, ProofFindingsRecord, TransferInstruction
 from gateway.contracts.policy import PolicyBody
 from gateway.engine.checks import (
+    MAX_OPEN_OBLIGATIONS,
     RequestFacts,
     TransferFacts,
     VerdictFacts,
@@ -344,7 +345,11 @@ class TestGuardianOverride:
     def test_override_does_not_skip_an_outstanding_receipt(self) -> None:
         # A signed approval buys past the caps and the review, never past money that is
         # already out and waiting on its receipt.
-        assert check_transfer(self.approved(owes_proof=True)) == "proof outstanding"
+        owed = self.approved(open_obligations=MAX_OPEN_OBLIGATIONS)
+        assert check_transfer(owed) == "proof outstanding"
+
+    def test_receipts_below_the_limit_do_not_block(self) -> None:
+        assert check_transfer(self.approved(open_obligations=MAX_OPEN_OBLIGATIONS - 1)) is None
 
     def test_same_request_without_override_is_blocked(self) -> None:
         assert check_transfer(self.approved(guardian_override=False)) == "over max per request"

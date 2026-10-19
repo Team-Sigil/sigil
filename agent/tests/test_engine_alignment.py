@@ -144,11 +144,15 @@ def test_the_override_lifts_nothing_else(platform, make_agent, add_request, aske
     assert platform.sent == [] and code in " ".join(record.guardrail_events)
 
 
-def test_the_override_still_needs_proof_and_respects_the_freeze(platform, make_agent, add_request):
+def test_the_override_still_owes_a_receipt_and_respects_the_freeze(platform, make_agent, add_request):
+    """The guardian's signed approval skips the review, never the receipt."""
     _approved(platform, add_request, asked=45, approved=45, proof=False)
-    agent, *_ = make_agent([reply(transfer(45, proof=findings(45))), reply(finish("declined", "No."))])
-    assert "proof_required" in " ".join(agent.handle_request("r1").guardrail_events)
+    agent, *_ = make_agent([reply(transfer(45, proof=findings(45))), reply(finish("sent_full", "Sent!"))])
+    record = agent.handle_request("r1")
+    assert platform.sent[0].proof_ids == [] and platform.verdicts == {}
+    assert len(platform.open_obligations("d1")) == 1 and "receipt_owed: 45.00" in record.guardrail_events
 
+    platform.obligations.clear()  # a fresh request, not the one that now owes its receipt
     platform.dependents["d1"].frozen = True
     _approved(platform, add_request, asked=45, approved=45)
     agent, *_ = make_agent([reply(transfer(45, proof=findings(45))), reply(finish("declined", "No."))])

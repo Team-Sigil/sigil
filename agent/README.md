@@ -42,6 +42,7 @@ chooses a recipient, changes policy or writes to a database.
 | `ask_guardian(question, recommendation, recommended_amount, urgency)` | `POST /guardian-questions` | At most one per run |
 | `propose_policy_update(change, evidence)` | `POST /policy-proposals` | Takes effect only if the guardian signs it |
 | `notify_guardian(message)` | `POST /notifications` | Informational note, filed under the dependent (`dependent_id`) |
+| `report_receipt(proof_findings)` | `POST /proof-obligations/{id}/settle` | Receipt checks only (a request that was paid first and owes its receipt). Code picks the proof; the platform decides whether it settles, and the outcome is `receipt_accepted` or `receipt_rejected` with a fixed reply |
 | `finish(outcome, reply_to_dependent, summary_for_guardian)` | `POST /decisions` | Ends every run. Code corrects the outcome if it doesn't match what happened, and checks the reply before recording it |
 
 Code-only outputs: pace warnings and the weekly summary (`POST /notifications`),
@@ -56,7 +57,7 @@ talks to the dependent or calls the engine.
 
 | | |
 |---|---|
-| **Triggers** | Engine-verifiable: amount ≥ review threshold, emergency claimed, amount over 2× the usual, new category, allowance above usual. Agent-side (can only add reviews): category confidence < 0.7, manipulation signals in the input |
+| **Triggers** | Engine-verifiable: amount ≥ review threshold, emergency claimed, amount over 2× the usual, new category, allowance above usual, paying first (amount ≥ proof threshold with no counting proof). Agent-side (can only add reviews): category confidence < 0.7, manipulation signals in the input |
 | **Inputs, phase 1** | Read by the Auditor itself with its own token: the policy, guidance, budget and recent history (`GET /dependents/{id}/context`). From the maker's run: the dependent's words, proof (text and images) and why it is reviewing. Not the maker's reasoning |
 | **Inputs, phase 2** | The maker's amount, category, confidence, purpose and reasoning |
 | **Output** | `agree`, or `flag` with a reason and concerns, posted with the Auditor's own token to `POST /auditor/verdicts` and bound to the transfer's idempotency key, amount and category |
@@ -193,10 +194,11 @@ sequenceDiagram
    typed, tampered and reused proofs, and the gateway flags near-duplicates and
    suspicious metadata, but a convincing fake from a new shop still gets through, up to
    `max_per_request`. See [proof-images.md](proof-images.md#proof-integrity).
-5. **Proof after payment isn't used yet.** The gateway can pay first and hold the
-   dependent's next requests until the receipt arrives, but the contract doesn't tell the
-   agent a receipt is owed or let it settle one, so the agent still asks for proof before
-   paying. Proposal and open decisions: [proof-after-payment.md](proof-after-payment.md).
+5. **An owed receipt can't be waived or chased.** Proof after payment is built (see
+   [proof-after-payment.md](proof-after-payment.md)): money above the threshold goes out
+   first after a review, and up to 3 receipts may be owed. Overdue receipts aren't reported
+   to the guardian and the guardian can't waive one (safeguards S2 and S3), so a dependent
+   who loses 3 receipts stays blocked from requests; the allowance still runs.
 6. **The inbound API has no body size limit of its own.** Run the agent service only
    behind the gateway, which limits bodies and rates; don't expose it directly.
 
@@ -236,7 +238,7 @@ firewall, no DB credentials in the agent's environment).
 | Platform | Zero trust: platform text in a prompt (guidance, names, history purposes, verified guardian answers, events, engine reasons, and the maker's reasoning shown to the Auditor) is capped, stripped and escaped like user input; inline fields are collapsed to one line | `guardrails/input.py` (`PlatformText`), `maker/context.py` |
 | Platform | A trusted channel that needed fixing (hidden characters, oversized, markup), or a proof whose bytes don't match its declared size, adds `platform_text_anomaly` and **forces an Auditor review** | `guardrails/input.py`, `maker/context.py` |
 | Tools | Allowlisted tools per mode; strict Pydantic arguments (`extra="forbid"`, so no recipient can be added); display amounts with max 2 decimals converted to integer base units | `guardrails/tools.py`, `contracts.py` |
-| Tools | Pre-checks before any API call: frozen, blocked category, per-request max, weekly budget, reservoir, **an amount stated in `amount_requested`** (never guessed from the chat), not more than requested (counting pending money), proof threshold, allowance ceiling (the signed amount: lowering is fine, raising needs the guardian). A signed guardian approval (`guardian_approved_amount`) lets exactly that amount past the per-request max and weekly cap without review, like the engine; nothing else is lifted | `guardrails/tools.py` |
+| Tools | Pre-checks before any API call: frozen, blocked category, per-request max, weekly budget, reservoir, **an amount stated in `amount_requested`** (never guessed from the chat), not more than requested (counting pending money), no request money while `max_proofs_owed` receipts are owed, proof findings when proof is attached (without proof, money above the threshold is paid first and an Auditor review is added), allowance ceiling (the signed amount: lowering is fine, raising needs the guardian). A signed guardian approval (`guardian_approved_amount`) lets exactly that amount past the per-request max and weekly cap without review, like the engine; nothing else is lifted | `guardrails/tools.py` |
 | Proofs | A proof counts toward the threshold only if it belongs to this request, its bytes match the platform's hash, it is an image, platform-extracted (`ocr`) text, or a PDF receipt whose shop signature the platform verified (`issuer_signed`), and it isn't a duplicate, AI-generated or an unverified PDF (with `AGENT_CAMERA_ONLY_PROOFS`, it must also be a verified in-app capture). Above the threshold the model must report `proof_findings` (merchant, date, total, receipt number, matches claim); a mismatch or a total below the amount is refused. Platform flags (near-duplicate, screenshot, old, edited, AI-suspected, re-photographed screen) force an Auditor review | `maker/context.py`, `guardrails/tools.py` |
 | Tools | Per-run limits: 1 transfer, 1 guardian question, 10 tool calls, 8 model turns | `config.py` |
 | Tools | Idempotency key derived by code from request state (`req:{id}:{thread length}`, `allowance:{dep}:{iso week}`), never chosen by the model | `maker/agent.py` |

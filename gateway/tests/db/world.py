@@ -23,6 +23,7 @@ from gateway.contracts.agent import (
     PolicyDraftValidation,
     TestScenario,
     TransferInstruction,
+    TransferResult,
 )
 from gateway.contracts.crypto import (
     CryptoTransferRequest,
@@ -33,9 +34,17 @@ from gateway.contracts.crypto import (
 )
 from gateway.contracts.policy import PolicyBody, policy_hash
 from gateway.contracts.signing import activate_policy_message, register_dependent_message
-from gateway.db.models import BudgetCounter, Family, Policy, Proof, Request, User
+from gateway.db.models import (
+    AuditorVerdict,
+    BudgetCounter,
+    Family,
+    Policy,
+    Proof,
+    Request,
+    User,
+)
 from gateway.engine.transfers import TransferEngine
-from gateway.enums import PolicyStatus, Role
+from gateway.enums import PolicyStatus, Role, Verdict
 
 AUSD = 1_000_000
 NOW = datetime(2026, 10, 14, 5, 0, tzinfo=UTC)  # Wednesday, ISO week 42 in Bangkok
@@ -239,6 +248,31 @@ class World:
         }
         values.update(overrides)
         return TransferInstruction.model_validate(values)
+
+    async def reviewed(self, instruction: TransferInstruction) -> TransferInstruction:
+        """The instruction with an Auditor "agree" bound to it, as a paid-first transfer
+        (at or above the proof threshold, no proof) needs."""
+        async with self.sessionmaker() as session:
+            verdict = AuditorVerdict(
+                family_id=self.family.id,
+                request_id=instruction.request_id,
+                idempotency_key=instruction.idempotency_key,
+                amount=instruction.amount,
+                category=instruction.category.value,
+                verdict=Verdict.AGREE,
+                reason="Fits the guidance.",
+                independent_assessment={"stance": "supports", "notes": "Plausible."},
+                review_triggers=["pay_first"],
+                model="auditor-model",
+            )
+            session.add(verdict)
+            await session.commit()
+            return instruction.model_copy(update={"auditor_verdict_id": str(verdict.id)})
+
+    async def pay_first(self, request: Request, **overrides: Any) -> TransferResult:
+        """Submit a reviewed transfer for the request: how money above the proof threshold
+        goes out with no proof attached."""
+        return await self.engine.submit(await self.reviewed(self.instruction(request, **overrides)))
 
     async def sibling(self) -> "World":
         """Another dependent of the same guardian, drawing on the same reservoir."""

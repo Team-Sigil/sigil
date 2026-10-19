@@ -24,12 +24,14 @@ from agent_layer.contracts import (
     FinishArgs,
     NotifyGuardianArgs,
     ProposePolicyUpdateArgs,
+    ReportReceiptArgs,
     RequestTransferArgs,
 )
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.money import to_base, to_display
 
-Mode = Literal["request", "allowance"]
+# "receipt": a request that was paid first and owes a receipt; the run checks the one sent.
+Mode = Literal["request", "allowance", "receipt"]
 
 TOOL_ARGS: dict[str, type[BaseModel]] = {
     "request_transfer": RequestTransferArgs,
@@ -37,13 +39,16 @@ TOOL_ARGS: dict[str, type[BaseModel]] = {
     "ask_guardian": AskGuardianArgs,
     "propose_policy_update": ProposePolicyUpdateArgs,
     "notify_guardian": NotifyGuardianArgs,
+    "report_receipt": ReportReceiptArgs,
     "finish": FinishArgs,
 }
 
 TOOLS_BY_MODE: dict[Mode, frozenset[str]] = {
-    "request": frozenset(TOOL_ARGS),
+    "request": frozenset(TOOL_ARGS) - {"report_receipt"},
     # A scheduled allowance has no dependent waiting on proof.
     "allowance": frozenset({"request_transfer", "ask_guardian", "notify_guardian", "finish"}),
+    # Checking an owed receipt moves no money: report what it says, or ask for a better one.
+    "receipt": frozenset({"report_receipt", "ask_for_proof", "notify_guardian", "finish"}),
 }
 
 # An allowance may be lowered but never raised: the engine caps it at the signed amount,
@@ -148,6 +153,15 @@ class ToolGuard:
         if amount > ctx.delegated_amount:
             raise reject("over_reservoir", "The reservoir does not have enough funds; ask the guardian for a top-up.")
         if self.request is not None:
+            owed = ctx.proofs_owed
+            if len(owed) >= ctx.max_proofs_owed:
+                listed = "; ".join(f"{to_display(o.amount)} for {o.purpose or 'an earlier request'}" for o in owed)
+                raise reject(
+                    "proof_outstanding",
+                    f"{len(owed)} receipts are still owed for money already sent ({listed}). No more money "
+                    "until the dependent sends one of them. Finish with declined and ask them to send an "
+                    "owed receipt in the request it belongs to.",
+                )
             asked = self.request.amount_requested
             # The amount must come from the app's structured field, never from the model's
             # reading of the chat: an unclear or off-topic message can't move money.
@@ -168,13 +182,11 @@ class ToolGuard:
                     + (f", {to_display(self.request.already_pending)} pending" if self.request.already_pending else "")
                     + ").",
                 )
-            if amount >= policy.proof_threshold:
-                if not self.proof_ids:
-                    raise reject(
-                        "proof_required",
-                        f"Amounts of {to_display(policy.proof_threshold)} or more need proof that can be used as "
-                        "evidence. Use ask_for_proof first.",
-                    )
+            if amount >= policy.proof_threshold and not self.proof_ids:
+                # Proof after payment: nobody can show a receipt before they've been paid. Code
+                # adds an Auditor review, and the platform records the receipt as owed.
+                self.log.add("pay_first", to_display(amount))
+            elif amount >= policy.proof_threshold:
                 f = args.proof_findings
                 if f is None:
                     raise reject("proof_findings_required", "Fill proof_findings from what the proof itself says.")

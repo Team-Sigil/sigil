@@ -112,14 +112,16 @@ These are the parts no model can talk around. Detail: [SPEC §8](gateway/SPEC.md
 
 ## Proof: how receipts work
 
-Built in the gateway; the app's side is on the `ui/proof-after-payment` branch, and the agent
-still asks for proof before paying until its contract adopts this (gateway README "Known
-gaps" 7). It replaces the first version, which required the receipt before the money, which
+Built in the gateway and the agent; the app's side is on the `ui/proof-after-payment`
+branch. It replaces the first version, which required the receipt before the money, which
 nobody without their own money can produce.
 
-- A request at or above the proof threshold is **sent first**, and the dependent then owes a
-  receipt.
-- Until that receipt is accepted, they cannot ask for more: `409 PROOF_OUTSTANDING`.
+- A request at or above the proof threshold is **sent first**, after the Auditor reviews it,
+  and the dependent then owes a receipt; the agent's reply asks for it.
+- Sending the receipt runs a **receipt check**: the agent reads it, the gateway decides
+  whether it settles what is owed (`receipt_accepted` or `receipt_rejected`).
+- A dependent may owe up to **3** receipts. With 3 owed, they cannot ask for more until one is
+  accepted: `409 PROOF_OUTSTANDING`.
 - A paper receipt is photographed **in the app's own camera**, with no gallery picker, and
   signed by the device key so it cannot be reused or substituted.
 - An online order's receipt arrives as the **PDF the shop sent**, and is accepted only if the

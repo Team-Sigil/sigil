@@ -70,6 +70,8 @@ class Outcome(StrEnum):
     BLOCKED = "blocked"
     SAFE_FALLBACK = "safe_fallback"
     TRANSFER_PENDING = "transfer_pending"  # cleared, but the chain hasn't confirmed it yet
+    RECEIPT_ACCEPTED = "receipt_accepted"  # the platform settled an owed receipt with this proof
+    RECEIPT_REJECTED = "receipt_rejected"  # the platform refused the proof offered for an owed receipt
 
 
 MODEL_CHOOSABLE_OUTCOMES = {
@@ -120,6 +122,16 @@ class HistoryItem(_Lenient):
     purpose: str = Field(default="", max_length=MAX_SHORT_TEXT)
 
 
+class ProofOwed(_Lenient):
+    """A receipt the dependent owes for money already sent (proof after payment)."""
+
+    obligation_id: str
+    request_id: str
+    amount: int = Field(gt=0)  # what the receipt must cover
+    purpose: str = Field(default="", max_length=MAX_SHORT_TEXT)
+    opened_at: datetime
+
+
 class AgentContext(_Lenient):
     dependent_id: str
     guardian_id: str
@@ -129,6 +141,10 @@ class AgentContext(_Lenient):
     delegated_amount: int = Field(ge=0)
     frozen: bool = False
     history: list[HistoryItem] = Field(default=[], max_length=MAX_ITEMS)
+    # Receipts owed for money already sent, on any of this dependent's requests. At
+    # `max_proofs_owed` open ones the platform sends no more money for requests.
+    proofs_owed: list[ProofOwed] = Field(default=[], max_length=MAX_ITEMS)
+    max_proofs_owed: int = Field(default=3, ge=1)
     # BCP 47 tags from the users' profiles, e.g. "en", "zh-CN", "zh-TW" (see i18n.py).
     dependent_locale: str | None = Field(default=None, max_length=35)
     guardian_locale: str | None = Field(default=None, max_length=35)
@@ -162,6 +178,8 @@ class DependentRequest(_Lenient):
     guardian_approved_amount: int | None = Field(default=None, gt=0)
     thread: list[ThreadMessage] = Field(default=[], max_length=MAX_ITEMS)
     proofs: list[ProofRef] = Field(default=[], max_length=50)
+    # Set while this request owes a receipt for money it already got.
+    proof_owed: ProofOwed | None = None
 
 
 # Where a proof came from. "photo" means a verified in-app capture (signed on the
@@ -269,6 +287,21 @@ class TransferResult(_Lenient):
     amount: int = 0
     reason: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
     tx_signature: str | None = None
+    # Set when this transfer went out without proof that covers it: a receipt is now owed.
+    proof_owed: ProofOwed | None = None
+
+
+class SettleObligation(_Strict):
+    """Sent to settle an owed receipt: the proof code picked and what the model read from it.
+    The platform decides whether it settles; the model never says a debt is paid."""
+
+    proof_id: str
+    findings: ProofFindingsRecord
+
+
+class SettledObligation(_Lenient):
+    settled: bool
+    reason: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
 
 
 class IndependentAssessment(_Strict):
@@ -446,6 +479,13 @@ class ProposePolicyUpdateArgs(_Strict):
 
 class NotifyGuardianArgs(_Strict):
     message: str = Field(min_length=3, max_length=500)
+
+
+class ReportReceiptArgs(_Strict):
+    """In a receipt run: what the attached receipt says. Code picks the proof and asks the
+    platform to settle the owed receipt; the platform decides."""
+
+    proof_findings: ProofFindings
 
 
 class FinishArgs(_Strict):

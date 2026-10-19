@@ -10,8 +10,14 @@ DESCRIPTIONS = {
         "Ask the platform to send tokens to the dependent's registered wallet. There is no "
         "recipient field. Limits are checked by code; larger or unusual transfers are "
         "reviewed by the Auditor first. At most one per request. At or above the proof "
-        "threshold, fill proof_findings from the proof itself; code refuses the transfer if "
-        "it doesn't match the claim or its total is lower than the amount."
+        "threshold with no proof attached, it goes out first (after an Auditor review) and the "
+        "dependent owes the receipt afterwards. With proof attached, fill proof_findings from "
+        "the proof itself; code refuses the transfer if it doesn't match the claim or its total "
+        "is lower than the amount."
+    ),
+    "report_receipt": (
+        "Report what the receipt attached now says, for the receipt this request owes. Code "
+        "offers it to the platform, which decides whether it settles what is owed."
     ),
     "ask_for_proof": "Ask the dependent for a receipt, quote or photo before deciding.",
     "ask_guardian": (

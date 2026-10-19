@@ -37,6 +37,7 @@ def run(module: ModuleType, triggers: Any, case: dict[str, Any]) -> list[str]:
         history=[module.HistoryItem.model_validate(h) for h in case["history"]],
         trigger=case["trigger"],
         emergency_claimed=case["emergency"],
+        proof_attached=case["proof"],
     )
     return result
 
@@ -49,8 +50,9 @@ GRID = [
         "history": hist,
         "trigger": trigger,
         "emergency": emergency,
+        "proof": proof,
     }
-    for amount, category, pol, hist, trigger, emergency in itertools.product(
+    for amount, category, pol, hist, trigger, emergency, proof in itertools.product(
         [1, 8 * AUSD, 24_999_999, 25 * AUSD, 30 * AUSD, 31 * AUSD],
         ["food", "education", "allowance"],
         [policy(), policy(review=10 * AUSD), policy(allowance=None)],
@@ -62,6 +64,7 @@ GRID = [
         ],
         ["request", "allowance"],
         [False, True],
+        [False, True],
     )
 ]
 
@@ -70,7 +73,10 @@ GRID = [
     ("case", "expected"),
     [
         ({"amount": 24_999_999, "history": []}, []),
-        ({"amount": 25 * AUSD, "history": []}, ["over_review_threshold"]),
+        ({"amount": 25 * AUSD, "history": []}, ["over_review_threshold", "pay_first"]),
+        ({"amount": 25 * AUSD, "history": [], "proof": True}, ["over_review_threshold"]),
+        ({"policy": policy(review=40 * AUSD), "amount": 25 * AUSD, "history": []}, ["pay_first"]),
+        ({"trigger": "allowance", "amount": 25 * AUSD}, []),
         ({"emergency": True}, ["emergency_claimed"]),
         ({"history": history([3 * AUSD] * 3)}, ["off_pattern_amount"]),
         ({"history": history([5 * AUSD] * 3, category="transport")}, ["new_category"]),
@@ -86,6 +92,7 @@ def test_fixed_cases(case: dict[str, Any], expected: list[str]) -> None:
         "history": history([5 * AUSD] * 3),
         "trigger": "request",
         "emergency": False,
+        "proof": False,
     }
     assert run(agent, trusted_triggers, base | case) == expected
 

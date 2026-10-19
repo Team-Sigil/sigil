@@ -40,6 +40,8 @@ from agent_layer.contracts import (
     Proof,
     ProofRequest,
     Receipt,
+    SettledObligation,
+    SettleObligation,
     TransferInstruction,
     TransferResult,
     UsageReport,
@@ -187,6 +189,12 @@ class MakerAPI(_Client):
 
     def request_proof(self, req: ProofRequest) -> Receipt:
         return self._request("POST", "/proof-requests", Receipt, json=req)
+
+    def settle_obligation(self, obligation_id: str, body: SettleObligation) -> SettledObligation:
+        """Offer a proof for an owed receipt; the platform decides whether it settles."""
+        return self._request(
+            "POST", f"/proof-obligations/{_id(obligation_id)}/settle", SettledObligation, json=body
+        )
 
     def propose_policy_update(self, proposal: PolicyProposal) -> Receipt:
         return self._request("POST", "/policy-proposals", Receipt, json=proposal)

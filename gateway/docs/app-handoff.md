@@ -94,12 +94,10 @@ total.
 
 ## Proof after payment
 
-A request at or above `proof_threshold` is **sent first**, and the dependent then owes a
-receipt. Until it arrives, `POST /requests` returns `409 PROOF_OUTSTANDING`.
-
-> **Not in use yet:** the agent layer still asks for proof before paying, so today an owed
-> receipt is rare (README "Known gaps" 7). Build the screens below anyway; they start
-> mattering as soon as the agent adopts proof after payment.
+A request at or above `proof_threshold` is **sent first** (after an Auditor review), and the
+dependent then owes a receipt. The agent's reply ends with a line asking for it. A
+dependent may owe up to **3** receipts; with 3 owed, `POST /requests` returns
+`409 PROOF_OUTSTANDING` until one is settled.
 
 - `GET /proof-obligations` lists what is owed (`amount`, `request_id`, `transfer_id`).
 - Upload against the obligation's `request_id` as usual, `POST /requests/{id}/proofs`.
@@ -110,8 +108,14 @@ receipt. Until it arrives, `POST /requests` returns `409 PROOF_OUTSTANDING`.
   `issuer_signed` and counts like a photo; one that does not is flagged
   `unchecked_document`, is never shown to the agent and settles nothing — so tell the
   dependent it was not accepted rather than leaving them waiting.
-- The block lifts only once the agent has read the proof and the gateway has accepted it,
-  so show the owed receipt as a task the dependent has to clear, not as a passing message.
+- Uploading a receipt to a request that owes one runs a **receipt check**, not a new
+  decision. Its `decision.outcome` is `receipt_accepted` (the receipt is settled and gone
+  from `GET /proof-obligations`) or `receipt_rejected` (`reply_to_dependent` says why: not
+  the full amount, already used, not a usable photo); `asked_proof` means nothing usable was
+  attached. No money moves in a receipt check.
+- A slot frees only once the agent has read the proof and the gateway has accepted it, so
+  show each owed receipt as a task the dependent has to clear ("2 receipts to send"), not as
+  a passing message.
 
 ## Checklist
 
@@ -125,5 +129,6 @@ receipt. Until it arrives, `POST /requests` returns `409 PROOF_OUTSTANDING`.
 - [ ] One SSE stream per family; de-duplicate notification events.
 - [ ] Dependent app (multi-dependent): no changes.
 - [ ] Show what is owed from `GET /proof-obligations`, and handle `409 PROOF_OUTSTANDING`
-      on a new request.
+      (3 receipts owed) on a new request.
+- [ ] Handle the receipt-check outcomes `receipt_accepted` and `receipt_rejected`.
 - [ ] Offer the PDF of an online order's receipt as well as the in-app camera.

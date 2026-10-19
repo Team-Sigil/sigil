@@ -14,8 +14,8 @@ For Julian (gateway layer). This is everything the agent layer needs from the ga
   checked at verification time, as the code does. `contracts/agent.py` has
   `Notification.dependent_id` and the PDF flags, and guardian notes naming a dependent are
   filed under that family (SPEC 2.3).
-- **Proof after payment:** a contract and behaviour proposal, with the decisions it needs,
-  is in [proof-after-payment.md](proof-after-payment.md).
+- **Proof after payment:** built end to end since SPEC 2.5; see
+  [proof-after-payment.md](proof-after-payment.md).
 
 ## Round 2 (2026-10-19): review of `c569749`
 

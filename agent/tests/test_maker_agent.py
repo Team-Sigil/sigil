@@ -50,18 +50,16 @@ def test_decline_moves_no_money(platform, make_agent, add_request):
 
 
 def test_ask_for_proof(platform, make_agent, add_request):
+    """Proof first is still a choice, e.g. when a quote already exists."""
     add_request(amount=30, message="I need 30 for a calculator for maths class")
-    agent, maker, _ = make_agent([
-        reply(transfer(30)),  # rejected by the proof guardrail
-        reply(tool_use("ask_for_proof", kind="quote", reason="Calculators over 25 need a quote.")),
+    agent, *_ = make_agent([
+        reply(tool_use("ask_for_proof", kind="quote", reason="A quote for the calculator, please.")),
         reply(finish("asked_proof", "Could you send a photo of the price tag?")),
     ])
     record = agent.handle_request("r1")
     assert record.outcome is Outcome.ASKED_PROOF
     assert platform.sent == []
     assert platform.proof_requests[0].kind == "quote"
-    assert "proof_required" in " ".join(record.guardrail_events)
-    assert "need proof" in all_text(maker.calls[1]["messages"])  # the model was told why
 
 
 def test_ask_guardian(platform, make_agent, add_request):

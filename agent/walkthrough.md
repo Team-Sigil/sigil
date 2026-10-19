@@ -146,9 +146,10 @@ http POST :8100/v1/requests/r-books/process "Authorization:Bearer wrong-token"
 
 ## 4. A larger request: proof first, then the Auditor
 
-Mali asks for 30.00 for a calculator. That is at the proof threshold, so the agent asks
-for a receipt. (Code enforces this: a transfer of 25.00 or more without proof is
-rejected before it reaches the platform, whatever the model decides.)
+Mali asks for 30.00 for a calculator. That is at the proof threshold. In this run the
+agent asks for the receipt first. It could also pay first: a transfer of 25.00 or more
+without proof then goes to the Auditor before it reaches the platform, and the receipt is
+owed afterwards (see [proof-after-payment.md](proof-after-payment.md)).
 
 ```bash
 http POST :8200/mock/requests "Authorization:Bearer mock-admin-token" \

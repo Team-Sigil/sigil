@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
@@ -44,12 +44,14 @@ from gateway.db.models import (
     UsedProofKey,
     User,
 )
+from gateway.engine.checks import MAX_OPEN_OBLIGATIONS
 from gateway.engine.proofs import counts_as_proof, keyed_fingerprint, proof_keys
 from gateway.engine.transfers import (
     lock_reservoir,
     owed_since,
     parse_uuid,
     pending_amount,
+    proofs_owed,
     reservoir_pending,
     usable_delegation,
     verified_approvals,
@@ -72,18 +74,6 @@ from gateway.events import EventBus, EventType
 from gateway.views import as_category, load_history, to_agent_proof
 
 logger = logging.getLogger(__name__)
-
-
-class SettleObligation(BaseModel):
-    """What the agent read from the proof it says settles an owed receipt."""
-
-    proof_id: str
-    findings: agent.ProofFindingsRecord
-
-
-class SettledObligation(BaseModel):
-    settled: bool
-    reason: str | None = None
 
 
 THREAD_LIMIT = 100
@@ -223,6 +213,8 @@ async def get_context(
         delegated_amount=max(0, delegated - reserved),
         frozen=family.frozen,
         history=await load_history(session, family.id),
+        proofs_owed=await proofs_owed(session, family.id),
+        max_proofs_owed=MAX_OPEN_OBLIGATIONS,
         dependent_locale=members.dependent.locale,
         guardian_locale=members.guardian.locale,
     )
@@ -293,6 +285,7 @@ async def get_request(session: AsyncSession, request_id: str) -> agent.Dependent
             for m in reversed(messages)
         ],
         proofs=[agent.ProofRef(id=str(p.id), media_type=p.media_type, kind=p.kind) for p in proofs],
+        proof_owed=next(iter(await proofs_owed(session, family.id, request.id)), None),
     )
 
 
@@ -619,11 +612,11 @@ async def validate_policy_draft(
 async def settle_obligation(
     session: AsyncSession,
     obligation_id: str,
-    body: "SettleObligation",
+    body: agent.SettleObligation,
     *,
     camera_only: bool,
     fingerprint_key: bytes,
-) -> "SettledObligation":
+) -> agent.SettledObligation:
     """Settle a receipt owed for money already sent (SPEC §8.9).
 
     The same proof rules as the engine: the proof must belong to the obligation's request,
@@ -650,7 +643,7 @@ async def settle_obligation(
     )
     assert obligation is not None
     if obligation.status is ObligationStatus.SETTLED:
-        return SettledObligation(settled=True, reason=None)
+        return agent.SettledObligation(settled=True, reason=None)
 
     proof_row = await session.scalar(
         select(Proof).where(
@@ -660,11 +653,11 @@ async def settle_obligation(
         )
     )
     if proof_row is None:
-        return SettledObligation(settled=False, reason="proof not for this request")
+        return agent.SettledObligation(settled=False, reason="proof not for this request")
 
     findings = body.findings
     if not findings.matches_claim or findings.total < obligation.amount:
-        return SettledObligation(settled=False, reason="proof does not cover the amount")
+        return agent.SettledObligation(settled=False, reason="proof does not cover the amount")
 
     dependent_id = str(family.dependent_user_id)
     proof = to_agent_proof(proof_row, dependent_id, with_content=False)
@@ -678,7 +671,7 @@ async def settle_obligation(
             origin = to_agent_proof(origin_row, dependent_id, with_content=False)
     if not counts_as_proof(proof, camera_only=camera_only, origin=origin):
         # An unsigned PDF lands here too: it is stored, but it settles nothing.
-        return SettledObligation(settled=False, reason="not usable as proof")
+        return agent.SettledObligation(settled=False, reason="not usable as proof")
 
     keys = proof_keys(proof, findings)
     used = await session.scalars(
@@ -689,7 +682,7 @@ async def settle_obligation(
         select(ReceiptFingerprint.key_hash).where(ReceiptFingerprint.key_hash == fingerprint)
     )
     if set(keys) & set(used) or receipt_used is not None:
-        return SettledObligation(settled=False, reason="proof already used")
+        return agent.SettledObligation(settled=False, reason="proof already used")
 
     obligation.status = ObligationStatus.SETTLED
     obligation.proof_id = proof_row.id
@@ -720,5 +713,5 @@ async def settle_obligation(
     except IntegrityError:
         # The receipt was spent by a transfer in another family between check and commit.
         await session.rollback()
-        return SettledObligation(settled=False, reason="proof already used")
-    return SettledObligation(settled=True, reason=None)
+        return agent.SettledObligation(settled=False, reason="proof already used")
+    return agent.SettledObligation(settled=True, reason=None)

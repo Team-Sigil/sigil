@@ -32,8 +32,11 @@ from agent_layer.contracts import (
     PolicyView,
     Proof,
     ProofFindingsRecord,
+    ProofOwed,
     ProofRef,
     ProofRequest,
+    SettledObligation,
+    SettleObligation,
     ThreadMessage,
     TransferInstruction,
     TransferResult,
@@ -84,6 +87,8 @@ def receipt_fingerprint(f: ProofFindingsRecord) -> str:
 MAKER_TOKEN = "maker-test-token"
 AUDITOR_TOKEN = "auditor-test-token"
 ADMIN_TOKEN = "mock-admin-token"  # mock-only routes under /mock
+# Receipts a dependent may owe at once before requests stop being paid (as the gateway).
+MAX_PROOFS_OWED = 3
 
 
 @dataclass
@@ -98,6 +103,16 @@ class DependentState:
     history: list[HistoryItem] = field(default_factory=list)
     dependent_locale: str | None = None
     guardian_locale: str | None = None
+
+
+@dataclass
+class Obligation:
+    """A receipt owed for money already sent (proof after payment)."""
+
+    owed: ProofOwed
+    dependent_id: str
+    guardian_id: str
+    settled: bool = False
 
 
 @dataclass
@@ -130,6 +145,10 @@ class MockPlatform:
             # Set False to simulate the signer being down: cleared transfers stay pending.
             self.signer_available = True
             self.pending: dict[str, TransferInstruction] = {}
+            # Proof after payment: pending transfers that will owe a receipt once they land,
+            # and the receipts owed, by obligation id.
+            self.pending_owes: set[str] = set()
+            self.obligations: dict[str, Obligation] = {}
             self.answers: dict[str, list[GuardianAnswer]] = {}
             self.verdicts: dict[str, StoredVerdict] = {}
             self.transfers: dict[str, TransferResult] = {}
@@ -203,9 +222,31 @@ class MockPlatform:
             delegated_amount=self.delegated.get(d.guardian_id, 0),
             frozen=d.frozen,
             history=d.history,
+            proofs_owed=[o.owed for o in self.open_obligations(dependent_id)],
+            max_proofs_owed=MAX_PROOFS_OWED,
             dependent_locale=d.dependent_locale,
             guardian_locale=d.guardian_locale,
         )
+
+    def open_obligations(self, dependent_id: str) -> list[Obligation]:
+        return [o for o in self.obligations.values() if o.dependent_id == dependent_id and not o.settled]
+
+    def owed_count(self, dependent_id: str) -> int:
+        """Open receipts plus pending transfers that will owe one once they land."""
+        pending = sum(1 for key in self.pending_owes if self.pending[key].dependent_id == dependent_id)
+        return len(self.open_obligations(dependent_id)) + pending
+
+    def request_view(self, request_id: str) -> DependentRequest:
+        """A request with the receipt it owes, if any."""
+        request = self.requests[request_id]
+        owed = next(
+            (o.owed for o in self.obligations.values() if o.owed.request_id == request_id and not o.settled), None
+        )
+        return request.model_copy(update={"proof_owed": owed})
+
+    def counts(self, pr: Proof) -> bool:
+        origin = self.proof(pr.derived_from) if pr.derived_from else None
+        return counts_as_proof(pr, camera_only=self.camera_only_proofs, origin=origin)
 
     # ----------------------------------------------------------------- engine
 
@@ -265,6 +306,11 @@ class MockPlatform:
                 # Pending money may still go out, so it counts against the requested amount.
                 if t.amount > request.amount_requested - request.already_sent - request.already_pending:
                     return block("over requested amount")
+                # Too many receipts are owed for money already sent (a guardian approval
+                # doesn't lift this; the allowance is not held back by it).
+                if self.owed_count(d.dependent_id) >= MAX_PROOFS_OWED:
+                    return block("proof outstanding")
+            attached = [self.proof(pid) for pid in t.proof_ids]
             needs_review = [] if override else trusted_triggers(
                 amount=t.amount,
                 category=t.category,
@@ -272,6 +318,7 @@ class MockPlatform:
                 history=d.history,
                 trigger=t.trigger,
                 emergency_claimed=bool(request and request.emergency_claimed),
+                proof_attached=any(pr is not None and self.counts(pr) for pr in attached),
             )
             if needs_review:
                 stored = self.verdicts.get(t.auditor_verdict_id or "")
@@ -288,25 +335,26 @@ class MockPlatform:
                 ):
                     return block("auditor verdict invalid")
             # Proof: the engine's own records decide, not the agent's claims.
-            proofs = [self.proof(pid) for pid in t.proof_ids]
+            proofs = attached
             if any(pr is None for pr in proofs):
                 return block("unknown proof")
             if any(pr.request_id != t.request_id or pr.dependent_id != t.dependent_id for pr in proofs):
                 return block("proof not for this request")
+            owes = False
             if t.trigger == "request" and t.amount >= d.policy.proof_threshold:
-                def counts(pr: Proof) -> bool:
-                    origin = self.proof(pr.derived_from) if pr.derived_from else None
-                    return counts_as_proof(pr, camera_only=self.camera_only_proofs, origin=origin)
-
+                # Proof after payment: with nothing that counts attached, the money goes out
+                # (after the review) and the receipt is owed. Attached proof must still be real.
+                counting = [pr for pr in proofs if self.counts(pr)]
                 usable = [
-                    pr for pr in proofs
-                    if counts(pr) and not set(self._proof_keys(d.guardian_id, pr, t.proof_findings)) & self.used_proofs
+                    pr for pr in counting
+                    if not set(self._proof_keys(d.guardian_id, pr, t.proof_findings)) & self.used_proofs
                 ]
-                if not usable:
-                    return block("proof already used" if any(counts(pr) for pr in proofs) else "proof required")
+                if counting and not usable:
+                    return block("proof already used")
                 f = t.proof_findings
-                if f is None or not f.matches_claim or f.total < t.amount:
+                if usable and (f is None or not f.matches_claim or f.total < t.amount):
                     return block("proof does not cover the transfer")
+                owes = not usable
             if needs_review:
                 stored.used = True
 
@@ -320,6 +368,8 @@ class MockPlatform:
                     update={"already_pending": request.already_pending + t.amount}
                 )
             self.pending[t.idempotency_key] = t
+            if owes:
+                self.pending_owes.add(t.idempotency_key)
             self.transfers[t.idempotency_key] = TransferResult(
                 status="pending", decision_id=self._next("dec"), amount=t.amount
             )
@@ -343,11 +393,43 @@ class MockPlatform:
                 "already_sent": request.already_sent + t.amount,
             })
         self.sent.append(t)
+        owed = None
+        if key in self.pending_owes:
+            self.pending_owes.discard(key)
+            owed = ProofOwed(
+                obligation_id=self._next("obligation"), request_id=t.request_id or "", amount=t.amount,
+                purpose=t.purpose, opened_at=self._now(),
+            )
+            self.obligations[owed.obligation_id] = Obligation(owed, t.dependent_id, d.guardian_id)
         result = TransferResult(
-            status="sent", decision_id=prior.decision_id, amount=t.amount, tx_signature=f"devnet_tx_{len(self.sent)}"
+            status="sent", decision_id=prior.decision_id, amount=t.amount, tx_signature=f"devnet_tx_{len(self.sent)}",
+            proof_owed=owed,
         )
         self.transfers[key] = result
         return result
+
+    def settle_obligation(self, obligation_id: str, body: SettleObligation) -> SettledObligation:
+        """The engine's proof rules decide whether an owed receipt is settled, not the agent."""
+        with self.lock:
+            o = self.obligations.get(obligation_id)
+            if o is None:
+                raise KeyError(obligation_id)
+            if o.settled:
+                return SettledObligation(settled=True)
+            pr = self.proof(body.proof_id)
+            if pr is None or pr.request_id != o.owed.request_id:
+                return SettledObligation(settled=False, reason="proof not for this request")
+            f = body.findings
+            if not f.matches_claim or f.total < o.owed.amount:
+                return SettledObligation(settled=False, reason="proof does not cover the amount")
+            if not self.counts(pr):
+                return SettledObligation(settled=False, reason="not usable as proof")
+            keys = set(self._proof_keys(o.guardian_id, pr, f))
+            if keys & self.used_proofs:
+                return SettledObligation(settled=False, reason="proof already used")
+            self.used_proofs.update(keys)
+            o.settled = True
+            return SettledObligation(settled=True)
 
     def retry_pending(self) -> list[TransferResult]:
         """What the real engine's retry job does: finish every pending transfer by its own key."""
@@ -412,7 +494,7 @@ class MockPlatform:
             maker_only(authorization)
             if rid not in p.requests:
                 raise HTTPException(404, "no such request")
-            return p.requests[rid]
+            return p.request_view(rid)
 
         @app.get(base + "/proofs/{pid}")
         def get_proof(pid: str, authorization: str = Header("")) -> Proof:
@@ -451,6 +533,14 @@ class MockPlatform:
             if idempotency_key != body.idempotency_key:
                 raise HTTPException(400, "Idempotency-Key header mismatch")
             return p.engine_transfer(body)
+
+        @app.post(base + "/proof-obligations/{oid}/settle")
+        def settle(oid: str, body: SettleObligation, authorization: str = Header("")) -> SettledObligation:
+            maker_only(authorization)
+            try:
+                return p.settle_obligation(oid, body)
+            except KeyError:
+                raise HTTPException(404, "no such proof obligation") from None
 
         @app.post(base + "/auditor/verdicts")
         def verdicts(body: VerdictSubmission, authorization: str = Header("")) -> dict:

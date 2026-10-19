@@ -211,6 +211,57 @@ _TEXTS: dict[str, dict[Locale, str]] = {
         "zh-Hans": "我没能处理完这个请求，已经转给你的家长了。",
         "zh-Hant": "我沒能處理完這個請求，已經轉給你的家長了。",
     },
+    "reply.receipt_accepted": {
+        "en": "Thanks! Your receipt for {amount} is checked, so you're all set.",
+        "zh-Hans": "谢谢！你 {amount} 的收据已经核对好了。",
+        "zh-Hant": "謝謝！你 {amount} 的收據已經核對好了。",
+    },
+    "reply.receipt_rejected": {
+        "en": "I couldn't accept that receipt. Please send a clear photo of the receipt for {amount}.",
+        "zh-Hans": "这张收据没能通过。请发一张 {amount} 那笔消费的清晰收据照片。",
+        "zh-Hant": "這張收據沒能通過。請傳一張 {amount} 那筆消費的清晰收據照片。",
+    },
+    "reply.receipt_unchecked": {
+        "en": "I couldn't check your receipt just now. Please send it again in a little while.",
+        "zh-Hans": "现在没能核对你的收据，请稍后再发一次。",
+        "zh-Hant": "現在沒能核對你的收據，請稍後再傳一次。",
+    },
+    "reply.receipt_owed": {
+        "en": "Please send a photo of the receipt for {amount} here once you've bought it.",
+        "zh-Hans": "买好之后，请在这里发一张 {amount} 的收据照片。",
+        "zh-Hant": "買好之後，請在這裡傳一張 {amount} 的收據照片。",
+    },
+    # Why the platform refused a receipt (its reason, in the dependent's language).
+    "receipt.reason.proof does not cover the amount": {
+        "en": "It doesn't show the purchase or the full amount.",
+        "zh-Hans": "收据上看不到这笔消费或完整金额。",
+        "zh-Hant": "收據上看不到這筆消費或完整金額。",
+    },
+    "receipt.reason.proof already used": {
+        "en": "That receipt was already used for another payment.",
+        "zh-Hans": "这张收据已经用于另一笔付款了。",
+        "zh-Hant": "這張收據已經用於另一筆付款了。",
+    },
+    "receipt.reason.not usable as proof": {
+        "en": "It can't be used as proof; take the photo with the app's camera.",
+        "zh-Hans": "它不能作为凭证，请用应用内的相机拍照。",
+        "zh-Hant": "它不能作為憑證，請用應用程式內的相機拍照。",
+    },
+    "receipt.reason.proof not for this request": {
+        "en": "It was sent for a different request.",
+        "zh-Hans": "它是为另一个请求发送的。",
+        "zh-Hant": "它是為另一個請求傳送的。",
+    },
+    "guardian.receipt_accepted": {
+        "en": "{name} sent the receipt for {amount} ({purpose}); it checked out.",
+        "zh-Hans": "{name}发来了 {amount}（{purpose}）的收据，核对无误。",
+        "zh-Hant": "{name}傳來了 {amount}（{purpose}）的收據，核對無誤。",
+    },
+    "guardian.receipt_rejected": {
+        "en": "{name} sent a receipt for {amount} ({purpose}), but it was refused: {reason}",
+        "zh-Hans": "{name}发来了 {amount}（{purpose}）的收据，但未通过：{reason}",
+        "zh-Hant": "{name}傳來了 {amount}（{purpose}）的收據，但未通過：{reason}",
+    },
     # To the dependent.
     "pace.warning": {
         "en": "Heads up: you've used {pct}% of this week's budget, and there are {days} days to go. {left} is left.",
@@ -359,6 +410,10 @@ def t(key: str, locale: Locale, *, count: int | None = None, **values: object) -
     if count == 1 and f"{key}.one" in _TEXTS:
         key = f"{key}.one"
     return _TEXTS[key][locale].format(**values)
+
+
+def has_text(key: str) -> bool:
+    return key in _TEXTS
 
 
 def category_label(category: str, locale: Locale) -> str:

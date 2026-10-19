@@ -110,7 +110,7 @@ loads and verifies the facts and runs the money transaction around it.
 |---|---|---|
 | 1 | The dependent and family exist | `unknown dependent` |
 | 2 | The family is not frozen | `frozen by guardian` |
-| 2a | Request: no receipt is outstanding for money already sent | `proof outstanding` |
+| 2a | Request: fewer than 3 receipts are owed for money already sent (pending transfers that will owe one included) | `proof outstanding` |
 | 3 | An active policy exists, its stored hash matches its body, and the guardian's signature covers that hash and version (re-verified every time) | `no active policy` / `policy signature invalid` |
 | 4 | The instruction names the active version | `stale policy version` |
 | 5 | The destination was registered with a valid guardian signature | `recipient not registered` |
@@ -123,16 +123,21 @@ loads and verifies the facts and runs the money transaction around it.
 | 12 | Proofs belong to this request, and any proof the agent attaches counts, is unused and covers the amount. Proof is **not** required up front (see "Proof after payment") | `unknown proof` / `proof not for this request` / `proof already used` / `proof does not cover the transfer` |
 
 **Proof after payment.** A dependent cannot buy anything before being paid, so a request
-at or above `proof_threshold` is **sent first** and leaves a receipt owed
-(`transfers.proof_owed`, then a row in `proof_obligations` once the money lands). While one
-is open, **or a transfer that will owe one is still pending**, the dependent gets no more
-money: `POST /requests` returns `409 PROOF_OUTSTANDING` and the engine blocks a request
-transfer with `proof outstanding` (check 2a). A guardian override does not lift it. The
+at or above `proof_threshold` with no counting proof is **sent first**, after an Auditor
+review (review trigger `pay_first`), and leaves a receipt owed (`transfers.proof_owed`, then
+a row in `proof_obligations` once the money lands; the transfer result carries it as
+`proof_owed`). A dependent may owe up to **3** receipts (`MAX_OPEN_OBLIGATIONS` in
+`engine/checks.py`), counting transfers that will owe one but are still pending. At 3 the
+dependent gets no more money: `POST /requests` returns `409 PROOF_OUTSTANDING` and the
+engine blocks a request transfer with `proof outstanding` (check 2a). A guardian override
+does not lift it. The
 scheduled allowance still runs, since it is the guardian's own standing instruction. Only
 attached proofs that count as evidence back a transfer and have their keys spent, so a
 receipt shown as a non-counting file can still settle what is owed. Once a receipt is
 owed, the 3-proof limit on the request starts again and the agent sees only the proofs sent
-since. The obligation is settled through `POST /agent/v1/proof-obligations/{id}/settle`,
+since. The agent sees the open receipts in its context (`proofs_owed`, `max_proofs_owed`)
+and on the request that owes one (`proof_owed`). The obligation is settled through
+`POST /agent/v1/proof-obligations/{id}/settle`,
 where the agent names the proof it read and what it found: under the reservoir lock, the
 gateway applies the engine's rules (the proof belongs to the request, counts as proof with
 camera-only mode applied, has not backed a transfer for any of the guardian's dependents,
@@ -142,7 +147,7 @@ still backs one payment.
 
 **Review rule.** `engine/triggers.py` is a copy of the agent layer's `trusted_triggers`
 (amount ≥ review threshold or 25% of the cap, emergency, off-pattern amount, new category,
-allowance above usual). The engine and the agent must agree; a parity test runs both on
+allowance above usual, and paying first: amount ≥ proof threshold with no counting proof). The engine and the agent must agree; a parity test runs both on
 1,296 cases.
 
 **Guardian override.** When the guardian has signed "approve N" for a request, the engine
@@ -408,6 +413,7 @@ guide: [docs/agent-handoff.md](docs/agent-handoff.md).
 | POST | `/transfers` (`Idempotency-Key` must equal the body's key) | maker |
 | POST | `/guardian-questions`, `/proof-requests`, `/policy-proposals`, `/notifications` | maker |
 | POST | `/decisions`, `/events`, `/usage`, `/policy-drafts/validate` | maker |
+| POST | `/proof-obligations/{id}/settle` (`{proof_id, findings}` → `{settled, reason}`) | maker |
 | POST | `/auditor/verdicts` | **Auditor only** |
 
 The gateway calls the agent layer's **inbound API** (`AGENT_URL`, `Authorization: Bearer
@@ -642,8 +648,7 @@ normalisation).
    agent (up to minutes). A job queue would let the app return at once and rely on SSE.
 5. **Policy proposals are listed, not adopted.** Adopting one means drafting and signing a
    new policy version; there is no one-click path yet.
-6. **No CI pipeline yet.** Tests, lint and the secret scan SEC-18 asks for run locally only.
-7. **The agent doesn't use proof after payment yet.** The gateway pays first and holds the
-   next request until the receipt arrives, but the agent contract can't tell the agent a
-   receipt is owed or let it settle one, so the agent still asks for proof before paying.
-   The agent layer's `proof-after-payment.md` proposes the contract and lists the decisions.
+6. **A lost receipt has no way out but a new one.** Overdue receipts aren't reported to the
+   guardian, and the guardian can't waive one (safeguards S2 and S3 in the agent layer's
+   `proof-after-payment.md`), so a dependent who loses 3 receipts stays blocked from
+   requests; the allowance still runs.

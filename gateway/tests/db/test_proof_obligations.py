@@ -1,9 +1,9 @@
 """Proof after payment (SPEC §8.9).
 
 A transfer at or above the proof threshold goes out first, because a dependent cannot buy
-anything before being paid, and leaves a receipt owed. While that receipt is outstanding the
-dependent gets no more money, and the single-use rules still mean one receipt backs one
-transfer.
+anything before being paid, and leaves a receipt owed. A dependent may owe up to three such
+receipts; at three, requests get no more money until one is settled. The single-use rules
+still mean one receipt backs one transfer.
 """
 
 import uuid
@@ -14,9 +14,9 @@ import pytest
 from sqlalchemy import select
 
 from gateway.agent_api import service
-from gateway.agent_api.service import SettledObligation, SettleObligation
-from gateway.contracts.agent import ProofFindingsRecord
+from gateway.contracts.agent import ProofFindingsRecord, SettledObligation, SettleObligation
 from gateway.db.models import ProofObligation, ReceiptFingerprint, Transfer
+from gateway.engine.checks import MAX_OPEN_OBLIGATIONS
 from gateway.engine.proofs import keyed_fingerprint
 from gateway.enums import ObligationStatus
 from tests.db.test_agent_api import MAKER
@@ -58,7 +58,7 @@ async def open_obligation(world: World) -> ProofObligation:
 class TestOwingAReceipt:
     async def test_transfer_at_the_threshold_is_sent_and_owes_a_receipt(self, world: World) -> None:
         request = await world.add_request(30 * AUSD)
-        result = await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        result = await world.pay_first(request, amount=30 * AUSD)
 
         assert result.status == "sent"
         obligation = await open_obligation(world)
@@ -75,39 +75,60 @@ class TestOwingAReceipt:
         """Nothing was paid, so there is nothing to show a receipt for."""
         world.crypto.mode = "fail"
         request = await world.add_request(30 * AUSD)
-        await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        await world.pay_first(request, amount=30 * AUSD)
         async with world.sessionmaker() as session:
             assert await session.scalar(select(ProofObligation)) is None
 
-    async def test_an_outstanding_receipt_blocks_the_next_transfer(self, world: World) -> None:
-        first = await world.add_request(30 * AUSD)
-        await world.engine.submit(world.instruction(first, amount=30 * AUSD))
+    async def test_the_sent_result_says_what_is_owed(self, world: World) -> None:
+        request = await world.add_request(30 * AUSD)
+        result = await world.engine.submit(
+            await world.reviewed(world.instruction(request, purpose="calculator", amount=30 * AUSD))
+        )
+        obligation = await open_obligation(world)
+        assert result.proof_owed is not None
+        assert result.proof_owed.obligation_id == str(obligation.id)
+        assert (result.proof_owed.amount, result.proof_owed.purpose) == (30 * AUSD, "calculator")
 
-        second = await world.add_request(10 * AUSD)
-        result = await world.engine.submit(world.instruction(second))
+    async def test_paying_first_needs_the_auditor(self, world: World) -> None:
+        """Safeguard S1: no proof, no receipt yet, so the story is reviewed first."""
+        request = await world.add_request(30 * AUSD)
+        result = await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        assert (result.status, result.reason) == ("blocked", "auditor verdict required")
+
+    async def test_up_to_three_receipts_may_be_owed(self, world: World) -> None:
+        for _ in range(MAX_OPEN_OBLIGATIONS):
+            request = await world.add_request(25 * AUSD)
+            sent = await world.engine.submit(
+                await world.reviewed(world.instruction(request, amount=25 * AUSD))
+            )
+            assert sent.status == "sent"
+
+        fourth = await world.add_request(10 * AUSD)
+        result = await world.engine.submit(world.instruction(fourth))
         assert (result.status, result.reason) == ("blocked", "proof outstanding")
 
-    async def test_a_pending_transfer_that_owes_a_receipt_blocks_the_next(
-        self, world: World
-    ) -> None:
+    async def test_pending_transfers_that_owe_a_receipt_count_too(self, world: World) -> None:
         """The obligation row only appears once the money lands, but money still in flight
-        must hold back the next request too."""
+        counts towards the limit too."""
         world.crypto.mode = "unavailable"
-        first = await world.add_request(30 * AUSD)
-        result = await world.engine.submit(world.instruction(first, amount=30 * AUSD))
-        assert result.status != "sent"
+        for _ in range(MAX_OPEN_OBLIGATIONS):
+            request = await world.add_request(25 * AUSD)
+            result = await world.engine.submit(
+                await world.reviewed(world.instruction(request, amount=25 * AUSD))
+            )
+            assert result.status == "pending"
         async with world.sessionmaker() as session:
             assert await session.scalar(select(ProofObligation)) is None
 
         world.crypto.mode = "confirm"
-        second = await world.add_request(10 * AUSD)
-        result = await world.engine.submit(world.instruction(second))
+        fourth = await world.add_request(10 * AUSD)
+        result = await world.engine.submit(world.instruction(fourth))
         assert (result.status, result.reason) == ("blocked", "proof outstanding")
 
     async def test_the_allowance_still_runs(self, world: World) -> None:
         """The guardian's standing instruction is not held back by a late receipt."""
         request = await world.add_request(30 * AUSD)
-        await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        await world.pay_first(request, amount=30 * AUSD)
 
         allowance = world.instruction(
             None,
@@ -132,9 +153,15 @@ class TestSettling:
         self, app_client: httpx.AsyncClient, world: World
     ) -> None:
         headers = await login(app_client, world.dependent_key)
-        request = await world.add_request(30 * AUSD)
-        await world.engine.submit(world.instruction(request, amount=30 * AUSD))
-        obligation = await open_obligation(world)
+        requests = []
+        for _ in range(MAX_OPEN_OBLIGATIONS):
+            # One owed receipt doesn't stop the next request; the limit does.
+            assert (await new_request(app_client, headers))["request"]["id"]
+            request = await world.add_request(25 * AUSD)
+            await world.engine.submit(
+                await world.reviewed(world.instruction(request, amount=25 * AUSD))
+            )
+            requests.append(request)
 
         blocked = await app_client.post(
             "/api/v1/requests", headers=headers, json={"message": "more please"}
@@ -142,6 +169,12 @@ class TestSettling:
         assert blocked.status_code == 409
         assert blocked.json()["error"]["code"] == "PROOF_OUTSTANDING"
 
+        request = requests[0]
+        async with world.sessionmaker() as session:
+            obligation = await session.scalar(
+                select(ProofObligation).where(ProofObligation.request_id == request.id)
+            )
+        assert obligation is not None
         uploaded = await upload(app_client, headers, str(request.id), JPEG)
         proof_id = uploaded.json()["proof"]["id"]
         response = await self.settle(app_client, obligation, proof_id)
@@ -154,7 +187,7 @@ class TestSettling:
     ) -> None:
         headers = await login(app_client, world.dependent_key)
         request = await world.add_request(30 * AUSD)
-        await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        await world.pay_first(request, amount=30 * AUSD)
         obligation = await open_obligation(world)
 
         uploaded = await upload(app_client, headers, str(request.id), JPEG)
@@ -172,7 +205,7 @@ class TestSettling:
         next request, is refused on its findings."""
         headers = await login(app_client, world.dependent_key)
         first = await world.add_request(30 * AUSD)
-        await world.engine.submit(world.instruction(first, amount=30 * AUSD))
+        await world.pay_first(first, amount=30 * AUSD)
         obligation = await open_obligation(world)
         uploaded = await upload(app_client, headers, str(first.id), JPEG)
         settled = await self.settle(app_client, obligation, uploaded.json()["proof"]["id"])
@@ -180,7 +213,9 @@ class TestSettling:
 
         second = await world.add_request(30 * AUSD)
         await world.engine.submit(
-            world.instruction(second, amount=30 * AUSD, idempotency_key=f"req:{second.id}:1")
+            await world.reviewed(
+                world.instruction(second, amount=30 * AUSD, idempotency_key=f"req:{second.id}:1")
+            )
         )
         again = await open_obligation(world)
         retaken = await upload(app_client, headers, str(second.id), jpeg(7))
@@ -190,7 +225,7 @@ class TestSettling:
     async def test_a_receipt_recorded_in_any_family_cannot_settle(self, world: World) -> None:
         """The keyed fingerprint is shared by all families, as in the engine."""
         request = await world.add_request(30 * AUSD)
-        await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        await world.pay_first(request, amount=30 * AUSD)
         obligation = await open_obligation(world)
         proof = await world.add_proof(request, source="photo")
         async with world.sessionmaker() as session:
@@ -209,7 +244,7 @@ class TestSettling:
     async def test_camera_only_applies_to_settling(self, world: World) -> None:
         """With CAMERA_ONLY_PROOFS, a plain file settles nothing, as the engine would rule."""
         request = await world.add_request(30 * AUSD)
-        await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        await world.pay_first(request, amount=30 * AUSD)
         obligation = await open_obligation(world)
         upload_ = await world.add_proof(request, b"from the gallery", source="file")
         photo = await world.add_proof(request, b"taken in the app", source="photo")
@@ -230,7 +265,7 @@ class TestSettling:
             assert (
                 await upload(app_client, headers, str(request.id), jpeg(seed))
             ).status_code == 200
-        await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        await world.pay_first(request, amount=30 * AUSD)
         await open_obligation(world)
 
         receipt = await upload(app_client, headers, str(request.id), jpeg(14))
@@ -286,7 +321,7 @@ class TestOnlineOrders:
         """It is stored, but nothing ties it to the shop, so it is not evidence."""
         headers = await login(app_client, world.dependent_key)
         request = await world.add_request(30 * AUSD)
-        await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        await world.pay_first(request, amount=30 * AUSD)
         obligation = await open_obligation(world)
 
         uploaded = await upload(
@@ -302,7 +337,7 @@ class TestOnlineOrders:
     ) -> None:
         headers = await login(app_client, world.dependent_key)
         request = await world.add_request(30 * AUSD)
-        await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+        await world.pay_first(request, amount=30 * AUSD)
         obligation = await open_obligation(world)
 
         uploaded = await upload(
@@ -318,7 +353,7 @@ class TestOnlineOrders:
 async def test_the_app_can_see_what_is_owed(app_client: httpx.AsyncClient, world: World) -> None:
     headers = await login(app_client, world.dependent_key)
     request = await world.add_request(30 * AUSD)
-    await world.engine.submit(world.instruction(request, amount=30 * AUSD))
+    await world.pay_first(request, amount=30 * AUSD)
 
     response = await app_client.get("/api/v1/proof-obligations", headers=headers)
     assert response.status_code == 200
@@ -328,3 +363,24 @@ async def test_the_app_can_see_what_is_owed(app_client: httpx.AsyncClient, world
     async with world.sessionmaker() as session:
         transfer = await session.scalar(select(Transfer))
         assert transfer is not None and transfer.proof_owed is True
+
+
+async def test_the_agent_sees_what_is_owed(app_client: httpx.AsyncClient, world: World) -> None:
+    request = await world.add_request(30 * AUSD)
+    await world.pay_first(request, purpose="calculator", amount=30 * AUSD)
+    obligation = await open_obligation(world)
+
+    context = await app_client.get(
+        f"/agent/v1/dependents/{world.dependent_id}/context", headers=MAKER
+    )
+    owed = context.json()["proofs_owed"]
+    assert context.json()["max_proofs_owed"] == MAX_OPEN_OBLIGATIONS
+    assert [(o["obligation_id"], o["amount"], o["purpose"]) for o in owed] == [
+        (str(obligation.id), 30 * AUSD, "calculator")
+    ]
+    seen = await app_client.get(f"/agent/v1/requests/{request.id}", headers=MAKER)
+    assert seen.json()["proof_owed"]["obligation_id"] == str(obligation.id)
+
+    other = await world.add_request(5 * AUSD)
+    unrelated = await app_client.get(f"/agent/v1/requests/{other.id}", headers=MAKER)
+    assert unrelated.json()["proof_owed"] is None

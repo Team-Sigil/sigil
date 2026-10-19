@@ -3,7 +3,7 @@
 Split in two on purpose:
 
 * ``trusted_triggers`` uses only facts the engine also holds (amount, signed policy,
-  history, the gateway's emergency flag). The engine runs the same rule and refuses a
+  history, the gateway's emergency flag, whether a counting proof is attached). The engine runs the same rule and refuses a
   transfer that needs review but carries no valid verdict, so a manipulated maker
   cannot skip review by lying.
 * ``agent_triggers`` adds signals only the agent zone sees (the model's category
@@ -38,6 +38,7 @@ def trusted_triggers(
     history: list[HistoryItem],
     trigger: Literal["request", "allowance"],
     emergency_claimed: bool = False,
+    proof_attached: bool = False,
 ) -> list[str]:
     if trigger == "allowance":
         usual = policy.allowance.amount if policy.allowance else 0
@@ -48,6 +49,10 @@ def trusted_triggers(
         reasons.append("over_review_threshold")
     if emergency_claimed:
         reasons.append("emergency_claimed")
+    # Paid before any proof: the receipt only comes afterwards, so the Auditor checks the
+    # story first (proof after payment, safeguard S1).
+    if amount >= policy.proof_threshold and not proof_attached:
+        reasons.append("pay_first")
     past = [h for h in history if h.kind == "transfer" and h.category is not Category.ALLOWANCE]
     if len(past) >= MIN_HISTORY_FOR_PATTERN:
         if amount > OFF_PATTERN_FACTOR * median(h.amount for h in past):

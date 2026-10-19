@@ -12,6 +12,10 @@ from gateway.contracts.policy import PolicyBody, policy_view
 from gateway.engine.proofs import counts_as_proof, proof_keys
 from gateway.engine.triggers import trusted_triggers
 
+# How many receipts a dependent may owe at once. At this many, requests get no more money
+# until one is settled; the scheduled allowance still goes out (SPEC §8.9).
+MAX_OPEN_OBLIGATIONS = 3
+
 
 @dataclass(frozen=True)
 class RequestFacts:
@@ -65,9 +69,9 @@ class TransferFacts:
     # was found and verified (SPEC SEC-05). Lets the transfer past the amount cap, the weekly
     # cap and the Auditor requirement; never past anything else.
     guardian_override: bool = False
-    # An earlier transfer at or above the proof threshold whose receipt has not arrived yet.
-    # The dependent gets no more money until it is settled (SPEC §8.9).
-    owes_proof: bool = False
+    # Receipts owed for money already sent (or cleared and still pending) to this dependent.
+    # At MAX_OPEN_OBLIGATIONS, requests get no more money until one is settled (SPEC §8.9).
+    open_obligations: int = 0
 
 
 def check_transfer(facts: TransferFacts) -> str | None:
@@ -87,9 +91,9 @@ def check_transfer(facts: TransferFacts) -> str | None:
         return "stale policy version"
     if not facts.destination_registered:
         return "recipient not registered"
-    # Money already sent is waiting on its receipt. The scheduled allowance is the
+    # Too many receipts are owed for money already sent. The scheduled allowance is the
     # guardian's own standing instruction, so it is not held back by this.
-    if facts.owes_proof and t.trigger == "request":
+    if facts.open_obligations >= MAX_OPEN_OBLIGATIONS and t.trigger == "request":
         return "proof outstanding"
     policy = facts.policy
 
@@ -143,6 +147,7 @@ def _review_failure(facts: TransferFacts, policy: PolicyBody) -> str | None:
         history=facts.history,
         trigger=t.trigger,
         emergency_claimed=bool(facts.request and facts.request.emergency_claimed),
+        proof_attached=bool(evidence(facts)),
     )
     if not needs_review:
         return None
@@ -166,7 +171,7 @@ def _proof_failure(facts: TransferFacts) -> str | None:
 
     Proof no longer has to exist before the money moves: a dependent cannot buy anything
     without being paid first, so a transfer at or above `proof_threshold` goes out and
-    leaves an obligation behind (`owes_proof`). What this still enforces is that any proof
+    leaves an obligation behind (`open_obligations`). What this still enforces is that any proof
     the agent *does* attach is real, belongs to the request, and has not already backed a
     transfer — so a receipt can never be spent twice.
     """

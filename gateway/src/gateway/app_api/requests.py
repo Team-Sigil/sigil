@@ -28,7 +28,8 @@ from gateway.db import audit_log
 from gateway.db.models import Decision, Family, Message, Proof
 from gateway.db.models import Request as RequestRow
 from gateway.db.session import SessionDep
-from gateway.engine.transfers import has_open_obligation, owed_since, parse_uuid
+from gateway.engine.checks import MAX_OPEN_OBLIGATIONS
+from gateway.engine.transfers import open_obligation_count, owed_since, parse_uuid
 from gateway.enums import AuditEvent, Role, ThreadRole
 from gateway.proof_images import NEAR_DUPLICATE_BITS, ImageRejectedError, hamming, normalise
 from gateway.proof_pdf import PdfSignatureError, SignedPdf
@@ -218,10 +219,11 @@ async def run_agent(request: Request, request_id: str) -> DecisionView:
 async def create_request(
     body: NewRequest, dependent: FamilyDependentDep, request: Request, session: SessionDep
 ) -> ProcessedRequest:
-    # Money already sent is waiting on its receipt: no more until it arrives (SPEC §8.9).
-    if await has_open_obligation(session, dependent.family.id):
+    # Too many receipts are owed for money already sent: no more until one arrives (§8.9).
+    if await open_obligation_count(session, dependent.family.id) >= MAX_OPEN_OBLIGATIONS:
         raise ProofOutstandingError(
-            "Send the receipt for the money you already received before asking for more."
+            f"You owe {MAX_OPEN_OBLIGATIONS} receipts for money you already received. "
+            "Send one of them before asking for more."
         )
     await enforce_daily_limit(session, dependent, _daily_limit(request))
     row = RequestRow(

@@ -349,14 +349,17 @@ class TestCameraOnlyEngine:
         )
 
     async def transfer(self, world: World, proof_ids: list[str], request: Request) -> str | None:
+        # Reviewed: a proof that doesn't count means paying first, which the Auditor checks.
         result = await self.engine(world).submit(
-            world.instruction(
-                request,
-                amount=30 * AUSD,
-                proof_ids=proof_ids,
-                proof_findings=ProofFindingsRecord(
-                    merchant="Book Shop", date="2026-10-14", total=30 * AUSD, matches_claim=True
-                ),
+            await world.reviewed(
+                world.instruction(
+                    request,
+                    amount=30 * AUSD,
+                    proof_ids=proof_ids,
+                    proof_findings=ProofFindingsRecord(
+                        merchant="Book Shop", date="2026-10-14", total=30 * AUSD, matches_claim=True
+                    ),
+                )
             )
         )
         return result.reason if result.status == "blocked" else result.status

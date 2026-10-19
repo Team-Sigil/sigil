@@ -79,14 +79,31 @@ def context_block(ctx: AgentContext, limits: Limits, pt: PlatformText) -> str:
         f"Dependent: {dependent_name(ctx, limits, pt)}\n"
         f"{guidance_block(ctx, limits, pt)}\n"
         f"Outer limits (enforced by code): weekly cap {to_display(p.weekly_cap)}, "
-        f"max per request {to_display(p.max_per_request)}, proof needed from "
-        f"{to_display(p.proof_threshold)}, blocked categories: {blocked}, "
+        f"max per request {to_display(p.max_per_request)}, receipt needed from "
+        f"{to_display(p.proof_threshold)} (it may come after the payment), blocked categories: {blocked}, "
         f"regular allowance: {allowance}.\n"
         f"This week: spent {to_display(ctx.budget.spent_this_week)}, "
         f"left {to_display(ctx.budget.remaining_this_week)}. "
         f"Reservoir: {to_display(ctx.delegated_amount)}."
         + (" TRANSFERS ARE FROZEN BY THE GUARDIAN." if ctx.frozen else "")
+        + owed_line(ctx, limits, pt)
         + f"\nRecent history:\n{history_lines(ctx, limits, pt)}"
+    )
+
+
+def owed_line(ctx: AgentContext, limits: Limits, pt: PlatformText) -> str:
+    """The receipts the dependent still owes for money already sent, if any."""
+    if not ctx.proofs_owed:
+        return ""
+    items = "; ".join(
+        f"{to_display(o.amount)} for "
+        + pt.inline(o.purpose or "an earlier request", max_chars=limits.max_platform_reason_chars, source="owed_purpose")
+        for o in ctx.proofs_owed
+    )
+    full = len(ctx.proofs_owed) >= ctx.max_proofs_owed
+    return (
+        f"\nReceipts owed for money already sent: {len(ctx.proofs_owed)} of at most {ctx.max_proofs_owed} ({items})."
+        + (" The limit is reached: no more money for requests until one arrives." if full else "")
     )
 
 
@@ -316,7 +333,10 @@ def prepare_request_input(
         proof_section += "\n" + "\n".join(pv.notes)
         case_parts.append("Notes on the proof: " + " ".join(pv.notes))
     if proofs and not pv.qualifying_ids:
-        proof_section += "\nNone of the proofs can be used as evidence, so no amount that needs proof can be sent."
+        proof_section += (
+            "\nNone of the proofs can be used as evidence: an amount that needs proof would go out first, "
+            "after an Auditor review, and the receipt would still be owed."
+        )
 
     text_block = context_block(ctx, limits, pt)
     unique_signals = sorted(set(signals + pt.signals))

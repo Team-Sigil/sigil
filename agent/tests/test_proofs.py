@@ -36,6 +36,16 @@ def _send_30(make_agent, *, proof=None, auditor=AGREE):
     )
 
 
+def _paid_first(platform, record):
+    """The proof didn't count, so nothing relied on it: the money went out first, after an
+    Auditor review, and the receipt is still owed."""
+    assert platform.sent and platform.sent[-1].proof_ids == []
+    assert "pay_first" in " ".join(record.guardrail_events)
+    reviewed = [v.submission for v in platform.verdicts.values()]
+    assert any("pay_first" in v.review_triggers for v in reviewed)
+    assert len(platform.open_obligations("d1")) == 1
+
+
 # ------------------------------------------------------------ what counts as proof
 
 
@@ -54,14 +64,13 @@ def test_a_valid_image_proof_unlocks_the_threshold(platform, make_agent, add_req
     (_image("p1").model_copy(update={"size_bytes": 5}), "image/png", "size mismatch"),
     (_image("p1", sha256="0" * 64), "image/png", "hash mismatch"),
 ])
-def test_a_skipped_proof_does_not_unlock_the_threshold(platform, make_agent, add_request, proof, ref_type, event):
+def test_a_skipped_proof_is_not_relied_on(platform, make_agent, add_request, proof, ref_type, event):
     add_request(amount=30, proofs=[_ref("p1", ref_type)])
     platform.add_proof(proof)
     agent, maker, _ = _send_30(make_agent)
     record = agent.handle_request("r1")
-    assert platform.sent == []
     assert any(event in e for e in record.guardrail_events)
-    assert "proof_required" in " ".join(record.guardrail_events)
+    _paid_first(platform, record)
     assert "None of the proofs can be used as evidence" in all_text(maker.calls[0]["messages"])
 
 
@@ -71,7 +80,7 @@ def test_typed_text_is_a_claim_not_proof(platform, make_agent, add_request, sour
     platform.add_proof(Proof(id="p1", media_type="text/plain", size_bytes=20, text="Office Mart 30.00", source=source))
     agent, maker, _ = _send_30(make_agent)
     record = agent.handle_request("r1")
-    assert platform.sent == [] and "proof_required" in " ".join(record.guardrail_events)
+    _paid_first(platform, record)
     assert "typed by the dependent" in all_text(maker.calls[0]["messages"])
 
 
@@ -110,7 +119,7 @@ def test_a_proof_for_another_request_is_skipped(platform, make_agent, add_reques
     platform.add_proof(_image("p1", request_id="r0", dependent_id="d1"))
     agent, maker, _ = _send_30(make_agent)
     record = agent.handle_request("r1")
-    assert platform.sent == []
+    _paid_first(platform, record)
     assert "p1 belongs to another request" in " ".join(record.guardrail_events)
     assert "platform_text_anomaly" in all_text(maker.calls[0]["messages"])  # forces a review
 
@@ -122,7 +131,8 @@ def test_a_proof_the_platform_cant_pair_is_shown_but_does_not_count(platform, ma
     platform.add_proof(_image("p1"))
     agent, maker, _ = _send_30(make_agent)
     record = agent.handle_request("r1")
-    assert platform.sent == [] and "proof_unpaired: p1" in record.guardrail_events
+    _paid_first(platform, record)
+    assert "proof_unpaired: p1" in record.guardrail_events
     assert "didn't confirm image proof 0 was uploaded for this request" in all_text(maker.calls[0]["messages"])
 
 
@@ -147,7 +157,7 @@ def test_a_duplicate_does_not_count(platform, make_agent, add_request):
     platform.add_proof(_image("p1", flags=["duplicate"]))
     agent, *_ = _send_30(make_agent)
     record = agent.handle_request("r1")
-    assert platform.sent == [] and "proof_required" in " ".join(record.guardrail_events)
+    _paid_first(platform, record)
 
 
 def test_upload_binds_hashes_and_flags_exact_duplicates(platform, base_url, add_request):
@@ -225,10 +235,14 @@ def _direct_transfer(base_url, key, **extra):
                       headers={"Authorization": f"Bearer {MAKER_TOKEN}", "Idempotency-Key": key}).json()
 
 
-def test_engine_requires_proof_even_from_a_compromised_maker(platform, base_url, add_request):
+def test_engine_pays_first_only_after_review_and_records_the_receipt_owed(platform, base_url, add_request):
     add_request(amount=30)
-    resp = _direct_transfer(base_url, "evil-noproof")
-    assert resp["status"] == "blocked" and resp["reason"] == "proof required"
+    unreviewed = _direct_transfer(base_url, "evil-noreview", auditor_verdict_id=None)
+    assert (unreviewed["status"], unreviewed["reason"]) == ("blocked", "auditor verdict required")
+
+    resp = _direct_transfer(base_url, "noproof")
+    assert resp["status"] == "sent" and resp["proof_owed"]["amount"] == T(30)
+    assert len(platform.open_obligations("d1")) == 1
 
 
 def test_engine_refuses_a_proof_from_another_request(platform, base_url, add_request):
@@ -240,13 +254,14 @@ def test_engine_refuses_a_proof_from_another_request(platform, base_url, add_req
     assert resp["reason"] == "proof not for this request"
 
 
-def test_engine_refuses_typed_text_or_findings_that_dont_cover_it(platform, base_url, add_request):
+def test_engine_never_counts_typed_text_and_refuses_findings_that_dont_cover_it(platform, base_url, add_request):
     add_request(amount=30, proofs=[_ref("p1", "text/plain")])
     platform.add_proof(Proof(id="p1", media_type="text/plain", size_bytes=5, text="30.00", source="typed"))
     resp = _direct_transfer(base_url, "evil-typed", proof_ids=["p1"],
                             proof_findings={"merchant": "m", "date": "d", "total": T(30), "matches_claim": True})
-    assert resp["reason"] == "proof required"
+    assert resp["status"] == "sent" and resp["proof_owed"] is not None  # typed text settles nothing
 
+    add_request(amount=30)
     platform.add_proof(_image("p2"))
     platform.requests["r1"] = platform.requests["r1"].model_copy(update={"proofs": [_ref("p2")]})
     resp = _direct_transfer(base_url, "evil-low", proof_ids=["p2"],
@@ -270,7 +285,7 @@ def test_an_ai_generated_proof_does_not_count_and_forces_review(platform, make_a
     platform.add_proof(_image("p2", data=PNG + b"2", flags=["ai_generated"]))
     agent, *_ = _send_30(make_agent)
     record = agent.handle_request("r2")
-    assert "proof_required" in " ".join(record.guardrail_events)
+    _paid_first(platform, record)
 
 
 @pytest.mark.parametrize("flag", ["ai_suspected", "rephotographed_screen"])
@@ -318,7 +333,8 @@ def test_camera_only_refuses_uploaded_images(platform, make_agent, add_request, 
     platform.add_proof(_image("p1", source=source))
     agent, maker, _ = _camera_only(platform, make_agent)
     record = agent.handle_request("r1")
-    assert platform.sent == [] and "proof_not_camera: p1" in record.guardrail_events
+    _paid_first(platform, record)
+    assert "proof_not_camera: p1" in record.guardrail_events
     assert "wasn't taken with the app's camera" in all_text(maker.calls[0]["messages"])
 
 
@@ -333,7 +349,7 @@ def test_camera_only_ocr_text_doesnt_count_when_its_photo_wouldnt(platform, make
     platform.add_proof(_image("img", **photo))
     agent, *_ = _camera_only(platform, make_agent)
     record = agent.handle_request("r1")
-    assert platform.sent == [], why
+    _paid_first(platform, record)  # not relied on: {why}
     assert "proof_not_camera: txt" in record.guardrail_events
 
 
@@ -354,7 +370,7 @@ def test_engine_enforces_camera_only_for_a_compromised_maker(platform, base_url,
     platform.add_proof(_image("p1", source="file"))
     resp = _direct_transfer(base_url, "evil-file", proof_ids=["p1"],
                             proof_findings={"merchant": "m", "date": "d", "total": T(30), "matches_claim": True})
-    assert resp["reason"] == "proof required"
+    assert resp["status"] == "sent" and resp["proof_owed"] is not None  # an upload settles nothing
 
 
 def test_camera_only_is_read_from_the_environment(monkeypatch):
@@ -385,14 +401,14 @@ def test_a_text_only_model_never_sees_or_relies_on_an_image_proof(platform, make
     platform.add_proof(_image("p1"))
     agent, maker, _ = _text_only_agent(maker_api, auditor_api, [
         reply(transfer(30, reasoning="The receipt matches.", proof=findings(30))),  # it would invent findings
-        reply(finish("asked_guardian", "I've asked your guardian.")),
-    ])
+        reply(finish("sent_full", "Sent!")),
+    ], AGREE)
     record = agent.handle_request("r1")
     first = maker.calls[0]["messages"][0]["content"]
     assert [b["type"] for b in first] == ["text"]  # no image block sent
     assert "you can't see images" in all_text(maker.calls[0]["messages"])
     assert "proof_unseen: p1" in record.guardrail_events
-    assert "proof_required" in " ".join(record.guardrail_events) and platform.sent == []
+    _paid_first(platform, record)  # the unseen photo backs nothing: the receipt is still owed
 
 
 def test_a_text_only_model_can_still_use_text_proofs(platform, maker_api, auditor_api, add_request):
@@ -458,11 +474,10 @@ def test_an_unchecked_pdf_is_never_shown_and_never_counts(platform, make_agent, 
     platform.add_proof(_pdf("p1", signed=False))
     agent, maker, _ = _send_30(make_agent, proof=ORDER)
     record = agent.handle_request("r1")
-    assert platform.sent == []
+    _paid_first(platform, record)
     assert [b["type"] for b in maker.calls[0]["messages"][0]["content"]] == ["text"]
     assert "upload the original receipt PDF" in all_text(maker.calls[0]["messages"])
     assert "proof_unchecked_document: p1" in record.guardrail_events
-    assert "proof_required" in " ".join(record.guardrail_events)
 
 
 @pytest.mark.parametrize("proof,event", [
@@ -476,7 +491,8 @@ def test_a_pdf_that_doesnt_check_out_is_skipped(platform, make_agent, add_reques
     platform.add_proof(proof)
     agent, maker, _ = _send_30(make_agent, proof=ORDER)
     record = agent.handle_request("r1")
-    assert platform.sent == [] and any(event in e for e in record.guardrail_events)
+    _paid_first(platform, record)
+    assert any(event in e for e in record.guardrail_events)
     assert [b["type"] for b in maker.calls[0]["messages"][0]["content"]] == ["text"]
 
 
@@ -487,12 +503,13 @@ def test_a_model_that_cant_read_pdfs_never_relies_on_one(platform, maker_api, au
 
     add_request(amount=30, proofs=[_ref("p1", "application/pdf")])
     platform.add_proof(_pdf("p1"))
-    maker = ScriptedLLM([reply(transfer(30, proof=ORDER)), reply(finish("asked_guardian", "Asked."))],
+    maker = ScriptedLLM([reply(transfer(30, proof=ORDER)), reply(finish("sent_full", "Sent!"))],
                         supports_documents=False)
-    record = MakerAgent(maker, maker_api, Auditor(ScriptedLLM([]), auditor_api)).handle_request("r1")
+    record = MakerAgent(maker, maker_api, Auditor(ScriptedLLM(list(AGREE)), auditor_api)).handle_request("r1")
     assert [b["type"] for b in maker.calls[0]["messages"][0]["content"]] == ["text"]
     assert "you can't read PDFs" in all_text(maker.calls[0]["messages"])
-    assert "proof_unseen: p1" in record.guardrail_events and platform.sent == []
+    assert "proof_unseen: p1" in record.guardrail_events
+    _paid_first(platform, record)
 
 
 def test_an_auditor_that_cant_read_pdfs_is_told(platform, maker_api, auditor_api, add_request):
@@ -523,7 +540,7 @@ def test_engine_refuses_an_unchecked_pdf(platform, base_url, add_request):
     platform.add_proof(_pdf("p1", signed=False))
     resp = _direct_transfer(base_url, "evil-pdf", proof_ids=["p1"],
                             proof_findings={"merchant": "Lazada", "date": "d", "total": T(30), "matches_claim": True})
-    assert resp["reason"] == "proof required"
+    assert resp["status"] == "sent" and resp["proof_owed"] is not None  # an unchecked PDF settles nothing
 
 
 def test_the_same_order_pdf_cannot_back_two_transfers(platform, make_agent, add_request):

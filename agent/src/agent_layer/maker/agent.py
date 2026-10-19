@@ -40,19 +40,23 @@ from agent_layer.contracts import (
     ProofFindings,
     ProofFindingsRecord,
     ProofRequest,
+    ProofOwed,
     ProposePolicyUpdateArgs,
+    ReportReceiptArgs,
     RequestTransferArgs,
+    SettledObligation,
+    SettleObligation,
     TransferInstruction,
 )
 from agent_layer.guardrails.budget import BudgetExhausted, TokenBudget
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import PlatformText
-from agent_layer.i18n import dependent_locale, guardian_locale, language_instruction, language_mismatch, t
+from agent_layer.i18n import dependent_locale, guardian_locale, has_text, language_instruction, language_mismatch, t
 from agent_layer.guardrails.output import RunFacts, check_reply, reconcile_outcome, safe_reply, text_weight
 from agent_layer.guardrails.tools import Mode, ToolGuard, ToolRejected
 from agent_layer.llm import LLM, LLMUnavailable, RunDeadline
 from agent_layer.maker.context import PreparedInput, context_block, prepare_request_input
-from agent_layer.maker.prompts import ALLOWANCE_INSTRUCTION, MAKER_SYSTEM
+from agent_layer.maker.prompts import ALLOWANCE_INSTRUCTION, MAKER_SYSTEM, RECEIPT_INSTRUCTION
 from agent_layer.maker.tools import tool_definitions
 from agent_layer.money import to_base, to_display
 from agent_layer.platform_api import MakerAPI, PlatformAPIError
@@ -81,6 +85,10 @@ class _Run:
     auditor_flagged: bool = False
     proof_requested: bool = False
     guardian_asked: bool = False
+    # Proof after payment: the receipt this run's payment left owed, and the platform's
+    # answer when a receipt run offered one.
+    receipt_owed: ProofOwed | None = None
+    receipt_result: SettledObligation | None = None
     finish: FinishArgs | None = None
     notes: list[str] = field(default_factory=list)
 
@@ -139,9 +147,19 @@ class MakerAgent:
             ctx, request, proofs, self._limits, log, images_readable=self._llm.supports_images,
             documents_readable=self._llm.supports_documents,
         )
+        owed = request.proof_owed
+        if owed is not None:
+            # Paid first: this run checks the receipt it owes and moves no money.
+            purpose = PlatformText(log).inline(
+                owed.purpose or "the earlier payment", max_chars=self._limits.max_platform_reason_chars,
+                source="owed_purpose",
+            )
+            prepared.content.append(
+                {"type": "text", "text": RECEIPT_INSTRUCTION.format(amount=to_display(owed.amount), purpose=purpose)}
+            )
         run = self._new_run(
             ctx,
-            "request",
+            "receipt" if owed is not None else "request",
             request,
             prepared,
             # One key per request *state*: re-processing the same state can never pay
@@ -307,6 +325,9 @@ class MakerAgent:
                     )
                 )
                 return "Proposal sent to the guardian for signing."
+            case "report_receipt":
+                assert isinstance(args, ReportReceiptArgs)
+                return self._report_receipt(run, args)
             case "notify_guardian":
                 assert isinstance(args, NotifyGuardianArgs)
                 self._api.notify(
@@ -320,6 +341,35 @@ class MakerAgent:
                 return "Finished."
         raise ToolRejected(f"Unknown tool {name!r}.")  # unreachable: admit() checks the allowlist
 
+    def _report_receipt(self, run: _Run, args: ReportReceiptArgs) -> str:
+        owed = run.request.proof_owed if run.request else None
+        if owed is None:
+            raise ToolRejected("This request doesn't owe a receipt. Call finish.")
+        if run.receipt_result is not None:
+            raise ToolRejected("The receipt was already checked. Call finish.")
+        if not run.prepared.proof_ids:
+            run.log.add("receipt_unusable")
+            raise ToolRejected(
+                "Nothing attached can be used as a receipt. Use ask_for_proof to ask for a clear photo of "
+                "the receipt, then finish with asked_proof."
+            )
+        # Code picks the proof (the latest one that counts), never the model.
+        proof_id = run.prepared.proof_ids[-1]
+        result = self._api.settle_obligation(
+            owed.obligation_id,
+            SettleObligation(proof_id=proof_id, findings=_findings_record(args.proof_findings)),
+        )
+        run.receipt_result = result
+        if result.settled:
+            run.log.add("receipt_accepted", to_display(owed.amount))
+            return "The platform accepted the receipt; nothing is owed for it any more. Call finish."
+        reason = PlatformText(run.log).inline(
+            result.reason or "not accepted", max_chars=self._limits.max_platform_reason_chars,
+            source="settle_reason",
+        )
+        run.log.add("receipt_rejected", reason)
+        return f"The platform refused the receipt: {reason}. Call finish; the dependent will be told."
+
     def _transfer(self, run: _Run, args: RequestTransferArgs) -> str:
         amount = run.guard.precheck_transfer(args)
         run.guard.record_transfer_attempt()
@@ -329,8 +379,9 @@ class MakerAgent:
             category=args.category,
             policy=run.ctx.policy,
             history=run.ctx.history,
-            trigger=run.mode,
+            trigger="allowance" if run.mode == "allowance" else "request",
             emergency_claimed=bool(run.request and run.request.emergency_claimed),
+            proof_attached=bool(run.prepared.proof_ids),
         ) + agent_triggers(
             category_confidence=args.category_confidence,
             injection_signals=run.prepared.signals,
@@ -394,7 +445,7 @@ class MakerAgent:
             TransferInstruction(
                 dependent_id=run.ctx.dependent_id,
                 request_id=run.request_id,
-                trigger=run.mode,
+                trigger="allowance" if run.mode == "allowance" else "request",
                 amount=amount,
                 purpose=args.purpose,
                 category=args.category,
@@ -411,6 +462,13 @@ class MakerAgent:
             run.amount_sent += result.amount
             if result.status == "duplicate":
                 run.log.add("idempotent_replay", run.idempotency_key)
+            if result.proof_owed is not None:
+                run.receipt_owed = result.proof_owed
+                run.log.add("receipt_owed", to_display(result.proof_owed.amount))
+                return (
+                    f"Sent {to_display(result.amount)}. No proof covered it, so the dependent now owes a "
+                    "receipt for it; the app adds a line asking for it. Call finish."
+                )
             return f"Sent {to_display(result.amount)}. Call finish."
         if result.status == "pending":
             run.amount_pending += result.amount or amount
@@ -464,10 +522,16 @@ class MakerAgent:
             amount_pending=run.amount_pending,
         )
         dep_locale, guard_locale = run.prepared.dependent_locale, run.prepared.guardian_locale
+        if run.receipt_result is not None:
+            return self._record(run, *self._receipt_texts(run))
         shown = run.amount_sent or run.amount_pending  # the amount fixed replies mention
         if run.finish is None:
             claimed = Outcome.SAFE_FALLBACK
-            reply = safe_reply(Outcome.SAFE_FALLBACK, locale=dep_locale)
+            # A receipt run asks nobody: the dependent just sends the receipt again.
+            reply = (
+                t("reply.receipt_unchecked", dep_locale) if run.mode == "receipt"
+                else safe_reply(Outcome.SAFE_FALLBACK, locale=dep_locale)
+            )
             summary = t("guardian.stopped_summary", guard_locale)
         else:
             claimed = Outcome(run.finish.outcome)
@@ -502,6 +566,38 @@ class MakerAgent:
             summary, outcome=outcome, amount_sent=shown, guidance="", max_chars=300, log=run.log,
             locale=guard_locale,
         )
+        if run.receipt_owed is not None and outcome in (Outcome.SENT_FULL, Outcome.SENT_PARTIAL):
+            # Paid first: the dependent must hear that a receipt is now owed, whatever the
+            # model wrote.
+            reply = f"{reply} {t('reply.receipt_owed', dep_locale, amount=to_display(run.receipt_owed.amount))}"
+        return self._record(run, outcome, reply, summary)
+
+    def _receipt_texts(self, run: _Run) -> tuple[Outcome, str, str]:
+        """Fixed texts for a receipt run: the platform's answer decides, never the model."""
+        assert run.receipt_result is not None and run.request is not None
+        owed = run.request.proof_owed
+        assert owed is not None
+        dep_locale, guard_locale = run.prepared.dependent_locale, run.prepared.guardian_locale
+        amount = to_display(owed.amount)
+        pt = PlatformText(GuardrailLog())
+        name = pt.inline(run.ctx.dependent_name, max_chars=self._limits.max_name_chars, source="dependent_name")
+        purpose = pt.inline(owed.purpose or "-", max_chars=self._limits.max_platform_reason_chars, source="owed_purpose")
+        if run.receipt_result.settled:
+            return (
+                Outcome.RECEIPT_ACCEPTED,
+                t("reply.receipt_accepted", dep_locale, amount=amount),
+                t("guardian.receipt_accepted", guard_locale, name=name, amount=amount, purpose=purpose),
+            )
+        key = f"receipt.reason.{run.receipt_result.reason}"
+        reason_key = key if has_text(key) else "receipt.reason.proof does not cover the amount"
+        reply = f"{t(reason_key, dep_locale)} {t('reply.receipt_rejected', dep_locale, amount=amount)}"
+        summary = t(
+            "guardian.receipt_rejected", guard_locale, name=name, amount=amount, purpose=purpose,
+            reason=t(reason_key, guard_locale),
+        )
+        return Outcome.RECEIPT_REJECTED, reply, summary
+
+    def _record(self, run: _Run, outcome: Outcome, reply: str, summary: str) -> DecisionRecord:
         record = DecisionRecord(
             dependent_id=run.ctx.dependent_id,
             request_id=run.request_id,

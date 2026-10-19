@@ -19,6 +19,7 @@ from agent_layer.contracts import (
     HistoryItem,
     Outcome,
     PolicyView,
+    ProofOwed,
     ProofRef,
     RequestTransferArgs,
     TransferInstruction,
@@ -153,6 +154,11 @@ def _ctx(**over) -> AgentContext:
     return AgentContext(**base)
 
 
+def _owed(i: int) -> ProofOwed:
+    return ProofOwed(obligation_id=f"o{i}", request_id=f"r0{i}", amount=T(30), purpose="calculator",
+                     opened_at=datetime(2026, 10, 13, tzinfo=UTC))
+
+
 def _req(amount=10, proofs=(), already_sent=0) -> DependentRequest:
     return DependentRequest(id="r1", dependent_id="d1", message="m", amount_requested=T(amount),
                             proofs=list(proofs), already_sent=T(already_sent))
@@ -192,7 +198,8 @@ def test_precheck_allows_in_limit_transfer():
         ({"ctx": _ctx(delegated_amount=T(3))}, _args(5), "over_reservoir"),
         ({"req": _req(amount=10)}, _args(12), "over_requested"),
         ({"req": _req(amount=10, already_sent=6)}, _args(5), "over_requested"),
-        ({"req": _req(amount=30)}, _args(30), "proof_required"),
+        ({"ctx": _ctx(proofs_owed=[_owed(i) for i in range(3)]), "req": _req(amount=5)}, _args(5),
+         "proof_outstanding"),
     ],
 )
 def test_precheck_rejections(kw, args, code):
@@ -325,7 +332,7 @@ def test_review_threshold_default_and_guardian_override():
     "amount,category,history,emergency,expected",
     [
         (10, Category.FOOD, _hist(8, 9, 10), False, []),
-        (25, Category.FOOD, _hist(20, 20, 20), False, ["over_review_threshold"]),
+        (25, Category.FOOD, _hist(20, 20, 20), False, ["over_review_threshold", "pay_first"]),
         (5, Category.FOOD, [], True, ["emergency_claimed"]),
         (21, Category.FOOD, _hist(8, 10, 12), False, ["off_pattern_amount"]),
         (5, Category.CLOTHING, _hist(8, 10, 12), False, ["new_category"]),

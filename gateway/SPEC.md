@@ -6,7 +6,7 @@
 > invent: use the decision in §15, or add an entry there and ask a human.
 
 - Project: FinTechathon 2026 entry (theme: AI as a Financial Participant)
-- Version: 2.4.1 (see §19)
+- Version: 2.5 (see §19)
 - Security weighs 30% of judging. Requirements tagged `SEC-xx` (§13) are non-negotiable.
 
 ---
@@ -170,8 +170,8 @@ Fixed by the agent contract (`contracts/agent.py`):
   savings, allowance, other`. `allowance` cannot be blocked.
 - **Outcomes** of an agent run: `sent_full, sent_partial, counter_offer, asked_proof,
   asked_guardian, asked_dependent, declined, out_of_scope`, and, set by code only,
-  `auditor_flagged, blocked, safe_fallback, transfer_pending`. Clients must accept new
-  outcomes.
+  `auditor_flagged, blocked, safe_fallback, transfer_pending, receipt_accepted,
+  receipt_rejected` (the last two end a receipt check). Clients must accept new outcomes.
 
 ---
 
@@ -315,12 +315,17 @@ engine". These invariants hold:
    week (by key). Raising it needs the guardian.
 8. **Requested amount.** Never more than `amount_requested − already_sent − pending`.
 9. **Proofs come after payment.** A dependent cannot buy anything before being paid, so a
-   request at or above `proof_threshold` is sent first and leaves a receipt owed. While an
-   owed receipt is outstanding the dependent gets no more money (`409 PROOF_OUTSTANDING`,
-   engine `proof outstanding`); a guardian override does not lift it, and the scheduled
-   allowance is unaffected. An owed receipt is settled only by a proof that counts, belongs
-   to the request and whose findings cover the amount — the gateway decides, never the
-   agent's say-so. A receipt backs one transfer: across the guardian's dependents (id, file
+   request at or above `proof_threshold` with no counting proof is sent first, after an
+   Auditor review (trigger `pay_first`), and leaves a receipt owed. A dependent may owe up to
+   **3** receipts (`MAX_OPEN_OBLIGATIONS`, pending transfers that will owe one included); at
+   3 they get no more money for requests (`409 PROOF_OUTSTANDING`, engine `proof
+   outstanding`) until one is settled. A guardian override does not lift that, and the
+   scheduled allowance is unaffected. The agent sees what is owed (`proofs_owed` in its
+   context, `proof_owed` on the request) and, when a receipt arrives for a request that
+   owes one, runs a receipt check: the model reports what the receipt says, code offers it
+   to `POST /agent/v1/proof-obligations/{id}/settle`, and the gateway decides. An owed
+   receipt is settled only by a proof that counts, belongs to the request and whose
+   findings cover the amount — never the agent's say-so. A receipt backs one transfer: across the guardian's dependents (id, file
    hash, fingerprint) and across all families (keyed fingerprint). Receipts for online
    orders arrive as PDFs: the gateway verifies the shop's signature over the file and only
    a PDF that verifies against a trusted root and an accepted shop counts as proof or
@@ -362,7 +367,8 @@ Implemented in `agent/`; guide: [docs/agent-handoff.md](docs/agent-handoff.md).
 - **Maker:** judges each request (send full or partial, counter-offer, ask for proof, ask
   the guardian, decline), sends the allowance, runs the policy interview, writes the weekly
   summary. Its tools are `request_transfer`, `ask_for_proof`, `ask_guardian`,
-  `propose_policy_update`, `notify_guardian` and `finish`; none has a recipient field.
+  `propose_policy_update`, `notify_guardian`, `report_receipt` (receipt checks only) and
+  `finish`; none has a recipient field.
   Per run: 1 transfer, 1 guardian question, 10 tool calls, a 150 s deadline. Every run ends
   with an explicit outcome; failures end as `safe_fallback`.
 - **Auditor:** a separate call with its own prompt and token. Forms its view from the raw
@@ -389,8 +395,8 @@ Implemented by the iOS app; guides: [docs/app-handoff.md](docs/app-handoff.md),
   `AGENT_WALLET_PUBKEY`) in Phantom. Send `X-Family-Id` when there are several dependents.
 - Dependent: requests and follow-ups; proofs from the in-app camera with App Attest-signed
   capture claims (no gallery picker), or the PDF receipt of an online order. After a
-  payment at or above `proof_threshold`, show what is owed and that no further request is
-  possible until it is sent.
+  payment at or above `proof_threshold`, show what is owed (`GET /proof-obligations`) and
+  that at 3 owed receipts no further request is possible until one is sent.
 - Live updates by SSE with the token in the `Authorization` header, never the URL;
   agent-backed calls need a timeout of at least 3 minutes.
 
@@ -487,7 +493,7 @@ gateway; the engine re-verifies approvals on every transfer.
 | Guardian override scope | Exactly the signed amount, past the amount cap, weekly cap and review only |
 | Sign-in method | Phantom `signMessage` over the gateway's text (not Phantom `signIn`) |
 | Receipts | In-app camera with App Attest, or a signed PDF for an online order (verified against `PDF_TRUSTED_ROOTS_PATH` and `PDF_ALLOWED_SIGNERS`); with `CAMERA_ONLY_PROOFS`, only verified captures count among images |
-| When proof is needed | After payment: money goes out first, the receipt is owed, and no further request is served until it arrives |
+| When proof is needed | After payment: money goes out first (after an Auditor review) and the receipt is owed; at 3 owed receipts no further request is served until one arrives. Proof first stays possible when something already exists to show (a quote, an online order's PDF) |
 | Custodial fallback | Not implemented |
 
 To change a decision: a `[SPEC]` commit updating this table.
@@ -553,3 +559,4 @@ or address fields; the commit or PR says which sections it implements.
 | 2026-10-19 | 2.3.1 | SEC-03, SEC-13 and SEC-14 marked tested: implemented and covered by tests in `sigil-crypto` |
 | 2026-10-19 | 2.4 | One monorepo (`Team-Sigil/sigil`): `gateway/`, `agent/` and `crypto/` with their full history, and the stack scripts at the root. Each layer keeps its own package, lockfile, Dockerfile and tests |
 | 2026-10-19 | 2.4.1 | SEC-18 met: CI runs every layer's tests and a gitleaks scan of the whole history on each push and pull request |
+| 2026-10-20 | 2.5 | Proof after payment end to end: the agent pays first (after an Auditor review, new trusted trigger `pay_first`), sees owed receipts (`proofs_owed`, `proof_owed`), checks an arriving receipt with `report_receipt` and the gateway's settle route, and ends with `receipt_accepted` / `receipt_rejected`. A dependent may owe up to 3 receipts before requests stop being paid |

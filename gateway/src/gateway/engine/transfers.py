@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
-from gateway.contracts.agent import TransferInstruction, TransferResult
+from gateway.contracts.agent import ProofOwed, TransferInstruction, TransferResult
 from gateway.contracts.crypto import (
     CryptoClient,
     CryptoTransferRequest,
@@ -125,26 +125,56 @@ async def verified_approvals(
     return amounts
 
 
-async def has_open_obligation(session: AsyncSession, family_id: uuid.UUID) -> bool:
-    """True while a receipt is owed for money sent to this dependent, or for money cleared
-    that will owe one once it lands: a pending transfer has no obligation row yet, but it
-    must still hold back the next one."""
-    found = await session.scalar(
-        select(ProofObligation.id).where(
+async def open_obligation_count(session: AsyncSession, family_id: uuid.UUID) -> int:
+    """Receipts owed for money sent to this dependent, plus money cleared that will owe one
+    once it lands: a pending transfer has no obligation row yet, but it already counts."""
+    owed = await session.scalar(
+        select(func.count())
+        .select_from(ProofObligation)
+        .where(
             ProofObligation.family_id == family_id,
             ProofObligation.status == ObligationStatus.OPEN,
         )
     )
-    if found is not None:
-        return True
     pending = await session.scalar(
-        select(Transfer.id).where(
+        select(func.count())
+        .select_from(Transfer)
+        .where(
             Transfer.family_id == family_id,
             Transfer.proof_owed.is_(True),
             Transfer.status == TransferStatus.PENDING,
         )
     )
-    return pending is not None
+    return int(owed or 0) + int(pending or 0)
+
+
+def proof_owed_view(obligation: ProofObligation, purpose: str) -> ProofOwed:
+    return ProofOwed(
+        obligation_id=str(obligation.id),
+        request_id=str(obligation.request_id),
+        amount=obligation.amount,
+        purpose=purpose,
+        opened_at=obligation.created_at,
+    )
+
+
+async def proofs_owed(
+    session: AsyncSession, family_id: uuid.UUID, request_id: uuid.UUID | None = None
+) -> list[ProofOwed]:
+    """The open receipts, oldest first, with what each payment was for; one request's only
+    when `request_id` is given."""
+    query = (
+        select(ProofObligation, Transfer.purpose)
+        .join(Transfer, Transfer.id == ProofObligation.transfer_id)
+        .where(
+            ProofObligation.family_id == family_id,
+            ProofObligation.status == ObligationStatus.OPEN,
+        )
+        .order_by(ProofObligation.created_at)
+    )
+    if request_id is not None:
+        query = query.where(ProofObligation.request_id == request_id)
+    return [proof_owed_view(row[0], row[1]) for row in (await session.execute(query)).all()]
 
 
 async def owed_since(session: AsyncSession, request_id: uuid.UUID) -> datetime | None:
@@ -524,7 +554,7 @@ class TransferEngine:
             proof_origins=origins,
             receipt_already_used=receipt_used,
             guardian_override=override,
-            owes_proof=await has_open_obligation(session, family.id),
+            open_obligations=await open_obligation_count(session, family.id),
         )
         return facts, verdict_row
 
@@ -642,6 +672,7 @@ class TransferEngine:
     async def _settle(
         self, transfer_id: uuid.UUID, tx_signature: str | None, error_code: str | None
     ) -> TransferResult:
+        owed: ProofOwed | None = None
         async with self._sessionmaker() as session:
             transfer = await session.scalar(
                 select(Transfer).where(Transfer.id == transfer_id).with_for_update()
@@ -679,15 +710,17 @@ class TransferEngine:
                     assert request is not None
                     request.already_sent += transfer.amount
                     if transfer.proof_owed:
-                        session.add(
-                            ProofObligation(
-                                family_id=transfer.family_id,
-                                request_id=transfer.request_id,
-                                transfer_id=transfer.id,
-                                amount=transfer.amount,
-                                status=ObligationStatus.OPEN,
-                            )
+                        obligation = ProofObligation(
+                            id=uuid.uuid4(),
+                            family_id=transfer.family_id,
+                            request_id=transfer.request_id,
+                            transfer_id=transfer.id,
+                            amount=transfer.amount,
+                            status=ObligationStatus.OPEN,
+                            created_at=datetime.now(UTC),
                         )
+                        session.add(obligation)
+                        owed = proof_owed_view(obligation, transfer.purpose)
                         await audit_log.append(
                             session,
                             transfer.family_id,
@@ -717,4 +750,5 @@ class TransferEngine:
                 decision_id=str(transfer.id),
                 amount=transfer.amount,
                 tx_signature=tx_signature,
+                proof_owed=owed,
             )
