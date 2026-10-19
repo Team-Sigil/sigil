@@ -6,7 +6,7 @@
 > invent: use the decision in §15, or add an entry there and ask a human.
 
 - Project: FinTechathon 2026 entry (theme: AI as a Financial Participant)
-- Version: 2.4 (see §19)
+- Version: 2.4.1 (see §19)
 - Security weighs 30% of judging. Requirements tagged `SEC-xx` (§13) are non-negotiable.
 
 ---
@@ -433,7 +433,7 @@ The gateway owns the database (tables: README "Data").
 | SEC-15 | Chats and proofs encrypted at rest; no personal data in on-chain memos | gateway, crypto | gateway tested |
 | SEC-16 | Append-only, hash-chained audit log that verifies end to end | gateway | tested |
 | SEC-17 | A signed freeze blocks all of the family's transfers immediately | gateway | tested |
-| SEC-18 | No secrets in repos; `.env` git-ignored; CI secret scan | all | `.env` ignored; **no CI yet** |
+| SEC-18 | No secrets in repos; `.env` git-ignored; CI secret scan | all | tested (CI: gitleaks over the whole history) |
 | SEC-19 | Errors never leak stack traces, keys or other families' data | gateway | tested |
 | SEC-20 | Default deny: missing or malformed data blocks | gateway | tested |
 
@@ -552,3 +552,4 @@ or address fields; the commit or PR says which sections it implements.
 | 2026-10-19 | 2.3 | Agent contract: `Notification.dependent_id` (a guardian note about one dependent, filed under that family) and the PDF flags `issuer_signed` / `unchecked_document`. A PDF's signer must match an allowed shop name exactly (default `LAZADA EXPRESS COMPANY LIMITED`, checked against a real receipt) and its certificate must be meant for signing; BER-encoded signatures are no longer broken by padding removal |
 | 2026-10-19 | 2.3.1 | SEC-03, SEC-13 and SEC-14 marked tested: implemented and covered by tests in `sigil-crypto` |
 | 2026-10-19 | 2.4 | One monorepo (`Team-Sigil/sigil`): `gateway/`, `agent/` and `crypto/` with their full history, and the stack scripts at the root. Each layer keeps its own package, lockfile, Dockerfile and tests |
+| 2026-10-19 | 2.4.1 | SEC-18 met: CI runs every layer's tests and a gitleaks scan of the whole history on each push and pull request |
