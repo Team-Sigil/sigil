@@ -4,12 +4,8 @@ A feature-level tour of the whole system, across all four layers. It says what e
 and what does not, and links to the document that owns each detail rather than repeating it,
 so there is one place to change when something moves.
 
-> **Source of truth.** [`sigil-gateway/SPEC.md`](sigil-gateway/SPEC.md) and the documents it
-> points to (its §0) are authoritative for the whole project. The `SPEC.md`,
-> `System Architecture.md` and `GUIDELINES.md` sitting next to this file are the **original
-> v1.0 copies and are out of date** — they still describe a web app, thirteen categories,
-> one dependent per guardian and an emergency fund that skips the limits. Read the gateway's
-> copies instead.
+> **Source of truth.** [`gateway/SPEC.md`](gateway/SPEC.md) and the documents it points to
+> (its §0) are authoritative for the whole project.
 >
 > Status below is as of **19 October 2026**. Where something is on an unmerged branch, it
 > says so.
@@ -35,14 +31,14 @@ more than the guardian allowed, to anyone other than the dependent.
 
 ## The four layers
 
-| Layer | Owner | Repo | State |
+| Layer | Owner | Where | State |
 |---|---|---|---|
 | App | Shine | `Team-Sigil/sigil-ios` | Native iOS, SwiftUI. **Screens only** — mock data, no API calls, no wallet yet |
-| Agent | Alwin | `Team-Sigil/agent-layer` | Maker, Auditor, scheduler, policy interview, guardrails. Built and tested |
-| Gateway | Julian | `Team-Sigil/sigil-gateway` | App API, platform API, policy engine, database, audit log. Built and tested |
-| Crypto | Han | — | Signer, delegation reads, `transfer_checked` on devnet. **Not built yet**; a mock stands in |
+| Agent | Alwin | `agent/` | Maker, Auditor, scheduler, policy interview, guardrails. Built and tested |
+| Gateway | Julian | `gateway/` | App API, platform API, policy engine, database, audit log. Built and tested |
+| Crypto | Han | `crypto/` | Signer, delegation reads, `transfer_checked` on devnet, devnet setup scripts. Built and tested |
 
-Detail: [SPEC §3](sigil-gateway/SPEC.md), [architecture.md](sigil-gateway/docs/architecture.md).
+Detail: [SPEC §3](gateway/SPEC.md), [architecture.md](gateway/docs/architecture.md).
 
 ---
 
@@ -50,11 +46,11 @@ Detail: [SPEC §3](sigil-gateway/SPEC.md), [architecture.md](sigil-gateway/docs/
 
 | Feature | Where it lives | State |
 |---|---|---|
-| Sign in with their wallet, no password | Gateway `/auth/*`, [auth-guide.md](sigil-gateway/docs/auth-guide.md) | Gateway done; app not wired |
+| Sign in with their wallet, no password | Gateway `/auth/*`, [auth-guide.md](gateway/docs/auth-guide.md) | Gateway done; app not wired |
 | Register a dependent by signing a message naming their wallet and account | `POST /families` | Done |
 | Support **several dependents**, each with their own policy, budget, freeze and history | One family per dependent | Done |
-| Fund one reservoir shared by all of them, by signing an SPL `approve` in Phantom | Crypto layer | Not built |
-| Set the policy **by chatting with the agent**, not by filling in a form | `/policy/interview`, [policy-protocol.md](agent-layer/policy-protocol.md) | Done |
+| Fund one reservoir shared by all of them, by signing an SPL `approve` in Phantom | Crypto layer (delegation reads) | Signer done; app not wired |
+| Set the policy **by chatting with the agent**, not by filling in a form | `/policy/interview`, [policy-protocol.md](agent/policy-protocol.md) | Done |
 | Review the draft with test scenarios ("if X asks for Y, I would Z") before agreeing | Interview `ready` state | Done |
 | Activate a policy by signing its hash, so nothing takes effect unsigned | `activate-policy` signature | Done |
 | Answer the agent's questions with a signature, seeing both the agent's and the Auditor's view | `/questions`, `answer-question` signature | Done |
@@ -73,7 +69,7 @@ Detail: [SPEC §3](sigil-gateway/SPEC.md), [architecture.md](sigil-gateway/docs/
 | Get an answer in their own words from the agent, not a reason code | `decision.reply_to_dependent` | Done |
 | Take a counter-offer or send it to their guardian, in one tap | App `LiveRequestCard` | App built (branch) |
 | Send a receipt with the app's own camera, signed by the device | App Attest capture claims | Gateway done; app not wired |
-| Send the PDF of an online order's receipt instead | Gateway `proof_pdf.py` | **On an unmerged branch** |
+| Send the PDF of an online order's receipt instead | Gateway `proof_pdf.py` | Gateway done; app not wired |
 | See their own limits — never the guardian's private guidance | `/policy/active` | Done |
 | See what they have left this week and what they asked for | `/budget`, `/requests` | Done |
 
@@ -88,13 +84,13 @@ Detail: [SPEC §3](sigil-gateway/SPEC.md), [architecture.md](sigil-gateway/docs/
 | Send the weekly allowance on its own | Scheduler | Done |
 | Warn when spending is running fast, and ask the guardian to top up before the reservoir runs dry | Scheduler | Done |
 | Write the weekly summary and propose policy updates from how the guardian answered | Scheduler | Done |
-| Speak English, Simplified Chinese or Traditional Chinese, matched to each reader | [i18n](agent-layer/README.md) | Done |
+| Speak English, Simplified Chinese or Traditional Chinese, matched to each reader | [i18n](agent/README.md) | Done |
 | Treat everything a dependent or a receipt says as data, never as instructions | Guardrails | Done |
 
 ## What the deterministic core guarantees
 
-These are the parts no model can talk around. Detail: [SPEC §8](sigil-gateway/SPEC.md),
-[README "The policy engine"](sigil-gateway/README.md).
+These are the parts no model can talk around. Detail: [SPEC §8](gateway/SPEC.md),
+[README "The policy engine"](gateway/README.md).
 
 - **Outer limits:** weekly cap, maximum per request, blocked categories, proof threshold,
   review threshold, and the signed allowance amount.
@@ -116,9 +112,10 @@ These are the parts no model can talk around. Detail: [SPEC §8](sigil-gateway/S
 
 ## Proof: how receipts work
 
-Currently on an unmerged branch (`feat/proof-after-payment` in the gateway,
-`ui/proof-after-payment` in the app), because the first version required the receipt before
-the money, which nobody without their own money can produce.
+Built in the gateway; the app's side is on the `ui/proof-after-payment` branch, and the agent
+still asks for proof before paying until its contract adopts this (gateway README "Known
+gaps" 7). It replaces the first version, which required the receipt before the money, which
+nobody without their own money can produce.
 
 - A request at or above the proof threshold is **sent first**, and the dependent then owes a
   receipt.
@@ -139,22 +136,21 @@ the money, which nobody without their own money can produce.
 
 | | |
 |---|---|
-| **Works today** | The gateway and the agent layer, together, against a mock crypto layer: a dependent can ask, the agent can decide, the Auditor can flag, the engine can clear or block, and everything is logged |
-| **Mocked** | Money. `mock-crypto` returns fake signatures; nothing has touched devnet |
-| **Not started** | The crypto layer: the signer, the delegation reads, the real `transfer_checked` (SEC-03, SEC-13, SEC-14 are all "to build") |
+| **Works today** | The gateway, the agent layer and the signer, together (`./sigil up`): a dependent can ask, the agent can decide, the Auditor can flag, the engine can clear or block, the signer re-checks and signs, and everything is logged |
+| **Devnet** | The signer is tested against an in-memory chain that executes its real transactions; `./sigil devnet` creates the aUSD mint and demo accounts for live devnet transfers |
 | **Screens only** | The iOS app. Every screen renders from mock data; no sign-in, no API calls, no Phantom, no camera |
-| **Known gaps** | Listed in [README "Known gaps"](sigil-gateway/README.md): one gateway instance, no C2PA or AI-image detection, synchronous agent calls, policy proposals not adoptable in one click |
+| **Known gaps** | Listed in [README "Known gaps"](gateway/README.md): one gateway instance, no C2PA or AI-image detection, synchronous agent calls, policy proposals not adoptable in one click |
 
 ## Where the detail lives
 
 | Topic | Document |
 |---|---|
-| Product, conventions, policy, security requirements, decisions | [sigil-gateway/SPEC.md](sigil-gateway/SPEC.md) |
-| Why it is built this way; threats and controls; user flows | [sigil-gateway/docs/architecture.md](sigil-gateway/docs/architecture.md) |
-| Every app-facing route, field and error | [sigil-gateway/README.md](sigil-gateway/README.md) "App API" |
-| The policy engine's checks, in order | [sigil-gateway/README.md](sigil-gateway/README.md) "The policy engine" |
-| Building the app against the gateway | [app-handoff.md](sigil-gateway/docs/app-handoff.md), [auth-guide.md](sigil-gateway/docs/auth-guide.md) |
-| What the agents do, and their guardrails | [agent-layer/README.md](agent-layer/README.md), [guide.md](agent-layer/guide.md) |
-| A runnable end-to-end narrative of the agent layer | [agent-layer/walkthrough.md](agent-layer/walkthrough.md) |
-| Receipts, integrity flags and verified capture | [agent-layer/proof-images.md](agent-layer/proof-images.md) |
-| The policy interview | [agent-layer/policy-protocol.md](agent-layer/policy-protocol.md) |
+| Product, conventions, policy, security requirements, decisions | [gateway/SPEC.md](gateway/SPEC.md) |
+| Why it is built this way; threats and controls; user flows | [gateway/docs/architecture.md](gateway/docs/architecture.md) |
+| Every app-facing route, field and error | [gateway/README.md](gateway/README.md) "App API" |
+| The policy engine's checks, in order | [gateway/README.md](gateway/README.md) "The policy engine" |
+| Building the app against the gateway | [app-handoff.md](gateway/docs/app-handoff.md), [auth-guide.md](gateway/docs/auth-guide.md) |
+| What the agents do, and their guardrails | [agent/README.md](agent/README.md), [guide.md](agent/guide.md) |
+| A runnable end-to-end narrative of the agent layer | [agent/walkthrough.md](agent/walkthrough.md) |
+| Receipts, integrity flags and verified capture | [agent/proof-images.md](agent/proof-images.md) |
+| The policy interview | [agent/policy-protocol.md](agent/policy-protocol.md) |

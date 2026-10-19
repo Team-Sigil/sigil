@@ -20,10 +20,13 @@ FinTechathon 2026 entry (theme: AI as a Financial Participant).
 | [`crypto/`](crypto) | Crypto | The signer: holds the agent wallet key, re-checks and signs `transfer_checked` on devnet; devnet setup scripts | [README](crypto/README.md) |
 | root | Stack | `docker-compose.yml`, the `./sigil` script, `.env.example`, `config/` | this file |
 
-The native iOS app lives in its own repository.
+The native iOS app lives in its own repository,
+[`Team-Sigil/sigil-ios`](https://github.com/Team-Sigil/sigil-ios).
 
 **Where to start reading:**
 
+- [`FEATURES.md`](FEATURES.md): what the whole system does, feature by feature, and what is
+  built today.
 - [`gateway/SPEC.md`](gateway/SPEC.md): the project's single source of truth (product,
   architecture, policy, security requirements `SEC-01`–`SEC-20`, decisions).
 - [`gateway/docs/architecture.md`](gateway/docs/architecture.md): design rationale, threats and
