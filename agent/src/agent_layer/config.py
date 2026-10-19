@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 def _env_int(name: str, default: int) -> int:
@@ -52,6 +53,21 @@ class Limits:
     default_review_fraction: float = 0.25
 
 
+Provider = Literal["anthropic", "openrouter"]
+PROVIDERS: tuple[Provider, ...] = ("anthropic", "openrouter")
+DEFAULT_MODELS: dict[Provider, str] = {
+    "anthropic": "claude-opus-5-5",
+    "openrouter": "nvidia/nemotron-3-super-120b-a12b",
+}
+
+
+def _provider(name: str, default: Provider) -> Provider:
+    raw = (os.environ.get(name) or default).strip().lower()
+    if raw not in PROVIDERS:
+        raise ValueError(f"{name} must be one of {', '.join(PROVIDERS)}, not {raw!r}")
+    return raw  # type: ignore[return-value]
+
+
 @dataclass(frozen=True)
 class Settings:
     platform_base_url: str
@@ -64,6 +80,18 @@ class Settings:
     max_tokens: int = 16_000
     inbound_token: str = ""
     limits: Limits = field(default_factory=Limits)
+    # Which model API each agent uses; switchable per agent.
+    maker_provider: Provider = "anthropic"
+    auditor_provider: Provider = "anthropic"
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Whether the OpenRouter model can read images. Off by default: the default model
+    # (Nemotron 3 Super) is text-only, and a model that can't see a receipt mustn't vouch for it.
+    openrouter_vision: bool = False
+
+    @property
+    def providers(self) -> set[Provider]:
+        return {self.maker_provider, self.auditor_provider}
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -73,12 +101,23 @@ class Settings:
             camera_only_proofs=_env_bool("AGENT_CAMERA_ONLY_PROOFS", Limits.camera_only_proofs),
             max_run_seconds=float(os.environ.get("AGENT_MAX_RUN_SECONDS") or Limits.max_run_seconds),
         )
+        both = _provider("AGENT_LLM_PROVIDER", "anthropic")
+        maker_provider = _provider("AGENT_MAKER_PROVIDER", both)
+        auditor_provider = _provider("AGENT_AUDITOR_PROVIDER", both)
+        openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+        if "openrouter" in (maker_provider, auditor_provider) and not openrouter_key:
+            raise ValueError("OPENROUTER_API_KEY is required when a provider is openrouter")
         return cls(
             platform_base_url=os.environ["PLATFORM_API_URL"],
             maker_token=os.environ["PLATFORM_MAKER_TOKEN"],
             auditor_token=os.environ["PLATFORM_AUDITOR_TOKEN"],
-            maker_model=os.environ.get("AGENT_MAKER_MODEL", "claude-opus-5-5"),
-            auditor_model=os.environ.get("AGENT_AUDITOR_MODEL", "claude-opus-5-5"),
+            maker_model=os.environ.get("AGENT_MAKER_MODEL") or DEFAULT_MODELS[maker_provider],
+            auditor_model=os.environ.get("AGENT_AUDITOR_MODEL") or DEFAULT_MODELS[auditor_provider],
+            maker_provider=maker_provider,
+            auditor_provider=auditor_provider,
+            openrouter_api_key=openrouter_key,
+            openrouter_base_url=os.environ.get("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1",
+            openrouter_vision=_env_bool("AGENT_OPENROUTER_VISION", False),
             maker_effort=os.environ.get("AGENT_MAKER_EFFORT", "high"),
             auditor_effort=os.environ.get("AGENT_AUDITOR_EFFORT", "high"),
             inbound_token=os.environ.get("AGENT_INBOUND_TOKEN", ""),

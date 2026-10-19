@@ -214,7 +214,7 @@ decision log) is an HTTP call to the platform API in
 
 | Layer | How it is enforced | Tested in |
 |---|---|---|
-| Static | No DB drivers, key libraries, subprocess, file or socket APIs in the package; only `platform_api.py` (and `llm.py` for Claude) do network I/O | `tests/test_isolation.py` |
+| Static | No DB drivers, key libraries, subprocess, file or socket APIs in the package; only `platform_api.py`, `llm.py` (Claude) and `llm_openrouter.py` (OpenRouter) do network I/O | `tests/test_isolation.py` |
 | Runtime | [`sandbox.py`](src/agent_layer/sandbox.py) installs a CPython audit hook: no file writes, reads only under code roots, no subprocess/ctypes/SQLite, no DB-driver imports, DNS and connections only to allowlisted hosts | `tests/test_isolation.py` (full request run inside the sandbox) |
 | Credentials | The maker and the Auditor use separate platform tokens. The Auditor's token can only read a dependent's context and post a verdict; only it can post one | `tests/test_auditor.py` |
 
@@ -258,6 +258,13 @@ three.
 | Dependent | The language and script of their latest message; if too short to tell (`"10?"`), their profile locale; otherwise English |
 | Guardian (summaries, questions, notes, Auditor reasons) | Their profile locale; otherwise the language their guidance is written in; otherwise English |
 
+**Code checks the model's language.** A dependent's reply that is clearly in the wrong
+language or script (Simplified for a Traditional reader, or the reverse) is replaced by
+the fixed reply in the right one (`reply_language_corrected`). The same applies to policy
+interview questions and the weekly summary. A text that doesn't tell (too short, or only
+characters both scripts share) is kept. When a Chinese message doesn't tell the script,
+the dependent's profile decides.
+
 Profile locales come from the platform as optional BCP 47 tags on the context
 (`dependent_locale`, `guardian_locale`: `en`, `zh-CN`, `zh-TW`, `zh-HK`, …).
 Unsupported tags are ignored. Purposes, reasoning and guardrail events stay in whatever
@@ -274,6 +281,7 @@ src/agent_layer/
   contracts.py      platform API payloads, tool arguments, Auditor outputs
   platform_api.py   MakerAPI / AuditorAPI: the only way out of the agent zone
   llm.py            LLM port + AnthropicLLM (Claude Opus 5.5, adaptive thinking, refusal fallbacks)
+  llm_openrouter.py OpenRouterLLM: the same port over OpenRouter (default NVIDIA Nemotron 3 Super)
   i18n.py           languages: who gets which, and every fixed text in en / zh-Hans / zh-Hant
   guardrails/       input, tools, output, budget
   maker/            system prompt, tool schemas, context builder, the agent loop
@@ -345,7 +353,7 @@ call is refused.
 ```bash
 pip install -e ".[dev]"
 pytest                      # full suite, no network or API key needed
-pytest -m live              # also hit the real Claude API (needs ANTHROPIC_API_KEY; costs money)
+pytest -m live              # also hit the real model (needs ANTHROPIC_API_KEY, or the OpenRouter settings below; costs money)
 
 python -m mock_platform.server          # mock platform with a demo family on :8200
 PLATFORM_API_URL=http://127.0.0.1:8200 \
@@ -356,14 +364,38 @@ AGENT_INBOUND_TOKEN=change-me python -m agent_layer   # agent service on :8100
 Or both in containers (mock platform on :8200, agent service on :8100):
 
 ```bash
-ANTHROPIC_API_KEY=sk-... docker compose up --build
+ANTHROPIC_API_KEY=sk-... docker compose up --build                                # Claude
+AGENT_LLM_PROVIDER=openrouter OPENROUTER_API_KEY=sk-or-... docker compose up --build   # OpenRouter
 ```
 
 [walkthrough.md](walkthrough.md) drives both services step by step with HTTPie. Every
 command in it is also a test (`pytest tests/test_walkthrough.py`).
 
-Optional settings: `AGENT_MAKER_MODEL`, `AGENT_AUDITOR_MODEL` (both default to
-`claude-opus-5-5`), `AGENT_MAKER_EFFORT`, `AGENT_AUDITOR_EFFORT`, `AGENT_SCHEDULER=0`,
+### Choosing the model
+
+Both agents use Claude by default. Switch either or both to any OpenRouter model:
+
+| Setting | Values | Default |
+|---|---|---|
+| `AGENT_LLM_PROVIDER` | `anthropic`, `openrouter` (for both agents) | `anthropic` |
+| `AGENT_MAKER_PROVIDER`, `AGENT_AUDITOR_PROVIDER` | Override for one agent, e.g. a cheaper maker with a Claude Auditor | `AGENT_LLM_PROVIDER` |
+| `AGENT_MAKER_MODEL`, `AGENT_AUDITOR_MODEL` | A model id for that agent's provider | `claude-opus-5-5`, or `nvidia/nemotron-3-super-120b-a12b` on OpenRouter |
+| `OPENROUTER_API_KEY` | Required when either agent uses OpenRouter | — |
+| `OPENROUTER_BASE_URL` | | `https://openrouter.ai/api/v1` |
+| `AGENT_OPENROUTER_VISION` | `1` if the OpenRouter model can read images | off |
+| `AGENT_MAKER_EFFORT`, `AGENT_AUDITOR_EFFORT` | `low`…`max`; on OpenRouter, `reasoning.effort` (`xhigh`/`max` send `high`) | `high` |
+
+OpenRouter requests go only to providers that support every parameter sent (tools,
+structured output), and the sandbox allows only the hosts of the providers in use.
+
+**Text-only models and receipts.** Nemotron 3 Super can't read images. A model that can't
+see a receipt photo is never shown it and can't count it as proof: it's told an image
+was attached, and anything that needs proof goes to the guardian instead. Text proofs
+(OCR) still work. A text-only Auditor is told about images it can't see, and flags when
+the case depends on them. For receipt photos, use a vision model (Claude, or an
+OpenRouter model with `AGENT_OPENROUTER_VISION=1`) for the maker.
+
+Other optional settings: `AGENT_SCHEDULER=0`,
 `AGENT_CAMERA_ONLY_PROOFS=1` (only verified in-app captures count as proof; turn on with
 the engine's matching rule once the app's camera flow ships), `AGENT_MAX_RUN_SECONDS`
 (default 150; keep it below the gateway's 180 s timeout).

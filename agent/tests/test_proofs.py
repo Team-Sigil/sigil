@@ -365,3 +365,59 @@ def test_camera_only_is_read_from_the_environment(monkeypatch):
     assert Settings.from_env().limits.camera_only_proofs is False
     monkeypatch.setenv("AGENT_CAMERA_ONLY_PROOFS", "1")
     assert Settings.from_env().limits.camera_only_proofs is True
+
+
+# ------------------------------------------------------- text-only models (e.g. Nemotron)
+
+
+def _text_only_agent(maker_api, auditor_api, maker_steps, auditor_steps=()):
+    from agent_layer.auditor.auditor import Auditor
+    from agent_layer.maker.agent import MakerAgent
+    from tests.fakes import ScriptedLLM
+
+    maker = ScriptedLLM(list(maker_steps), supports_images=False)
+    auditor = ScriptedLLM(list(auditor_steps), supports_images=False)
+    return MakerAgent(maker, maker_api, Auditor(auditor, auditor_api)), maker, auditor
+
+
+def test_a_text_only_model_never_sees_or_relies_on_an_image_proof(platform, maker_api, auditor_api, add_request):
+    add_request(amount=30, proofs=[_ref("p1")])
+    platform.add_proof(_image("p1"))
+    agent, maker, _ = _text_only_agent(maker_api, auditor_api, [
+        reply(transfer(30, reasoning="The receipt matches.", proof=findings(30))),  # it would invent findings
+        reply(finish("asked_guardian", "I've asked your guardian.")),
+    ])
+    record = agent.handle_request("r1")
+    first = maker.calls[0]["messages"][0]["content"]
+    assert [b["type"] for b in first] == ["text"]  # no image block sent
+    assert "you can't see images" in all_text(maker.calls[0]["messages"])
+    assert "proof_unseen: p1" in record.guardrail_events
+    assert "proof_required" in " ".join(record.guardrail_events) and platform.sent == []
+
+
+def test_a_text_only_model_can_still_use_text_proofs(platform, maker_api, auditor_api, add_request):
+    add_request(amount=30, proofs=[_ref("p1", "text/plain")])
+    platform.add_proof(Proof(id="p1", media_type="text/plain", size_bytes=20, text="Office Mart 30.00",
+                             source="ocr"))
+    agent, *_ = _text_only_agent(maker_api, auditor_api,
+                                 [reply(transfer(30, proof=findings(30))), reply(finish("sent_full", "Sent!"))],
+                                 AGREE)
+    assert agent.handle_request("r1").outcome is Outcome.SENT_FULL
+
+
+def test_a_text_only_auditor_is_told_it_cant_see_the_images(platform, maker_api, auditor_api, add_request):
+    """A vision maker and a text-only Auditor: the Auditor gets no image blocks, and is
+    told that the case's images exist but are unseen."""
+    from agent_layer.auditor.auditor import Auditor
+    from agent_layer.maker.agent import MakerAgent
+    from tests.fakes import ScriptedLLM
+
+    add_request(amount=30, proofs=[_ref("p1")])
+    platform.add_proof(_image("p1"))
+    auditor = ScriptedLLM(list(AGREE), supports_images=False)
+    maker = ScriptedLLM([reply(transfer(30, proof=findings(30))), reply(finish("sent_full", "Sent!"))])
+    record = MakerAgent(maker, maker_api, Auditor(auditor, auditor_api)).handle_request("r1")
+    first = auditor.calls[0]["messages"][0]["content"]
+    assert [b["type"] for b in first] == ["text"]
+    assert "1 image proof(s) were attached, but you can't see images" in first[0]["text"]
+    assert "auditor_proof_unseen: 1" in record.guardrail_events

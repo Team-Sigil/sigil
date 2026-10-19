@@ -1,7 +1,14 @@
-"""Thin port over the Claude API so the agents can be tested with a scripted model.
+"""A thin port over the model API, so the agents can switch providers and be tested with
+a scripted model.
 
-``AnthropicLLM`` is the production implementation. Tests use
-``tests.fakes.ScriptedLLM``, which returns pre-written responses with the same shape.
+Implementations: ``AnthropicLLM`` (Claude, below) and ``OpenRouterLLM``
+(``llm_openrouter.py``, any OpenRouter model, e.g. NVIDIA Nemotron). Both take and return
+the same Anthropic-style messages and content blocks, so the agents don't know which one
+they're using. Tests use ``tests.fakes.ScriptedLLM``.
+
+``supports_images`` says whether the model can see images. When it can't, image proofs
+are shown to it as a note and never count as proof (``maker/context.py``), so a
+text-only model can't vouch for a receipt it never saw.
 """
 
 from __future__ import annotations
@@ -43,6 +50,7 @@ class ParsedResponse[P: BaseModel]:
 
 class LLM(Protocol):
     model: str
+    supports_images: bool
 
     def create(
         self, *, system: str, messages: list[dict], tools: list[dict], timeout: float | None = None
@@ -63,6 +71,7 @@ class AnthropicLLM:
         client: anthropic.Anthropic | None = None,
     ):
         self.model = model
+        self.supports_images = True
         self._effort = effort
         self._max_tokens = max_tokens
         self._client = client or anthropic.Anthropic()

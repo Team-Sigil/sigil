@@ -135,7 +135,15 @@ class Auditor:
                 log.add("auditor_context_mismatch", conflict)
                 raise ContextConflict(conflict)
             budget.ensure_available()
-            content = [*case.proof_images, {"type": "text", "text": self._case_message(case, own, pt)}]
+            images = case.proof_images if self._llm.supports_images else []
+            message = self._case_message(case, own, pt)
+            if case.proof_images and not images:
+                log.add("auditor_proof_unseen", str(len(case.proof_images)))
+                message += (
+                    f"\n\n{len(case.proof_images)} image proof(s) were attached, but you can't see images. "
+                    "You can't confirm what they show: weigh that, and flag if the case depends on them."
+                )
+            content = [*images, {"type": "text", "text": message}]
             messages: list[dict] = [{"role": "user", "content": content}]
             first = self._llm.parse(
                 system=AUDITOR_SYSTEM, messages=messages, output_format=IndependentAssessment,

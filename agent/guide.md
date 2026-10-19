@@ -72,7 +72,9 @@ What this means for your app:
   guardian's proof threshold are never sent without one. The agent looks at the first
   3 proofs on a request. Each must be JPEG, PNG, WebP, GIF (first frame only) or plain
   text, and at most 5 MB; anything else is skipped. Limit uploads to 3 in your app, so
-  that no proof is silently ignored.
+  that no proof is silently ignored. If the agent runs on a text-only model (for example
+  Nemotron on OpenRouter), receipt *photos* can't be checked: requests that need proof
+  then go to the guardian (`asked_guardian`) instead of being sent.
 - **A proof only counts for the request it was uploaded to, and only once.** Upload it
   to that request (the platform records `request_id`); the same receipt, or a new photo
   of it, can't back a second transfer. Text the dependent types is treated as their

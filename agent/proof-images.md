@@ -26,6 +26,7 @@ on its own. Rules are in `maker/context.py` and `config.py`.
 | Flags | `duplicate`, `ai_generated` | Shown, doesn't count as proof, review forced |
 | Flags | `near_duplicate`, `screenshot`, `no_camera_metadata`, `old_capture`, `edited`, `ai_suspected`, `rephotographed_screen` | Shown, and an Auditor review is forced |
 | Flags | `camera_signed` | Shown as a note; changes no rule. Unknown flags are ignored |
+| Model can't read images (e.g. Nemotron on OpenRouter) | Image proofs aren't shown to the model and never count | A note tells the model; anything needing proof goes to the guardian |
 | Camera-only (`AGENT_CAMERA_ONLY_PROOFS=1`, off by default) | Only `photo` images, and `ocr` text whose `derived_from` is a `photo` on the same request, count | Anything else is shown but doesn't count |
 
 The agent does **not** check:

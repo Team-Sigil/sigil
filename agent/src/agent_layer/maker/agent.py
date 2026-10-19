@@ -46,7 +46,7 @@ from agent_layer.contracts import (
 from agent_layer.guardrails.budget import BudgetExhausted, TokenBudget
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import PlatformText
-from agent_layer.i18n import dependent_locale, guardian_locale, language_instruction, t
+from agent_layer.i18n import dependent_locale, guardian_locale, language_instruction, language_mismatch, t
 from agent_layer.guardrails.output import RunFacts, check_reply, reconcile_outcome, safe_reply, text_weight
 from agent_layer.guardrails.tools import Mode, ToolGuard, ToolRejected
 from agent_layer.llm import LLM, LLMUnavailable, RunDeadline
@@ -132,7 +132,9 @@ class MakerAgent:
         if len(request.proofs) > len(refs):
             log.add("proofs_capped", str(len(request.proofs)))
         proofs = [self._api.get_proof(ref.id) for ref in refs]
-        prepared = prepare_request_input(ctx, request, proofs, self._limits, log)
+        prepared = prepare_request_input(
+            ctx, request, proofs, self._limits, log, images_readable=self._llm.supports_images
+        )
         run = self._new_run(
             ctx,
             "request",
@@ -485,6 +487,10 @@ class MakerAgent:
             log=run.log,
             locale=dep_locale,
         )
+        if language_mismatch(reply, dep_locale):
+            # The model ignored the language or script it was told to use.
+            run.log.add("reply_language_corrected", dep_locale)
+            reply = safe_reply(outcome, shown, dep_locale)
         summary = check_reply(
             summary, outcome=outcome, amount_sent=shown, guidance="", max_chars=300, log=run.log,
             locale=guard_locale,

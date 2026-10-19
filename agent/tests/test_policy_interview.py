@@ -233,3 +233,18 @@ def test_protocol_endpoint(client):
     assert [r["name"] for r in data["requirements"]] == [r.name for r in REQUIREMENTS]
     assert data["requirements"][0]["label"] == "每周预算"
     assert c.get("/v1/policy-interviews/protocol").status_code == 401
+
+
+def test_required_guidance_cannot_be_assumed(platform, maker_api):
+    """What the live run with Nemotron did: after one message, everything it didn't know was
+    'assumed', with a full draft. Limits may be proposed; the guardian's intent may not."""
+    convo = [a("Who is it for?"), g("It's for my daughter Mali, she's 15. Around 100 a week.")]
+    result, _ = run(maker_api, convo, InterviewAssessment(
+        items=report(all_items("assumed", weekly_cap="stated", dependent_context="stated"), 1), draft=DRAFT,
+        next_questions=["What's always fine to pay for, and what should I ask you about first?"]))
+    statuses = {c.name: c.status for c in result.checklist}
+    assert result.phase == "gathering" and result.question_kind == "question"
+    assert statuses["always_fine"] == statuses["ask_first"] == "missing"
+    assert statuses["max_per_request"] == "assumed"  # a limit can still be proposed
+    assert statuses["emergencies"] == "assumed"       # optional guidance may stay assumed
+    assert "interview_guidance_not_assumed: always_fine" in result.guardrail_events

@@ -221,3 +221,94 @@ def test_pattern_flags_in_chinese():
     assert "本週有 4 筆「教育」類請求" in flags
     assert "週二有 6 筆請求" in flags
     assert "2 次請求被攔截或被標記" in flags
+
+
+# ----------------------------------------------- script detection and enforcement
+
+
+@pytest.mark.parametrize("text,script", [
+    ("好的，已經轉給你 8.00。", "zh-Hant"),
+    ("好的，已经转给你 8.00。", "zh-Hans"),
+    ("好的！", None),            # no characters that tell the scripts apart
+    ("我要八元", None),
+])
+def test_chinese_script(text, script):
+    from agent_layer.i18n import chinese_script
+
+    assert chinese_script(text) == script
+
+
+@pytest.mark.parametrize("text,expected,mismatch", [
+    ("好的，已经转给你 8.00。", "zh-Hant", True),    # Simplified for a Traditional reader
+    ("好的，已經轉給你 8.00。", "zh-Hans", True),
+    ("好的，已經轉給你 8.00。", "zh-Hant", False),
+    ("好的！", "zh-Hant", False),                   # can't tell: not a mismatch
+    ("Sure, I sent it!", "zh-Hant", True),
+    ("好的，已经转给你。", "en", True),
+    ("Sure, I sent it!", "en", False),
+    ("OK", "zh-Hans", False),                       # too short to tell
+])
+def test_language_mismatch(text, expected, mismatch):
+    from agent_layer.i18n import language_mismatch
+
+    assert language_mismatch(text, expected) is mismatch
+
+
+def test_the_prompt_names_the_script_with_examples(platform, make_agent, add_request):
+    add_request(amount=8, message="可以給我8塊買筆記本嗎？")
+    agent, maker, _ = make_agent([reply(finish("declined", "這次不行。"))])
+    agent.handle_request("r1")
+    assert "Traditional characters such as 這、給、說、錢, never Simplified" in all_text(maker.calls[0]["messages"])
+
+
+def test_a_reply_in_the_wrong_script_is_replaced(platform, make_agent, add_request):
+    add_request(amount=8, message="可以給我8塊買上學用的筆記本嗎？")
+    agent, *_ = make_agent([reply(transfer(8)), reply(finish("sent_full", "好的，已经转给你了，买笔记本吧！"))])
+    record = agent.handle_request("r1")
+    assert record.reply_to_dependent == safe_reply(Outcome.SENT_FULL, T(8), "zh-Hant")
+    assert "reply_language_corrected: zh-Hant" in record.guardrail_events
+
+
+def test_a_reply_in_the_wrong_language_is_replaced(platform, make_agent, add_request):
+    add_request(amount=8)  # English
+    agent, *_ = make_agent([reply(finish("declined", "这次不行，下次再问吧。"))])
+    record = agent.handle_request("r1")
+    assert record.reply_to_dependent == safe_reply(Outcome.DECLINED, 0, "en")
+
+
+def test_a_reply_that_doesnt_tell_the_script_is_kept(platform, make_agent, add_request):
+    add_request(amount=8, message="可以給我8塊買筆記本嗎？")
+    agent, *_ = make_agent([reply(finish("declined", "好的！"))])
+    assert agent.handle_request("r1").reply_to_dependent == "好的！"
+
+
+def test_a_script_neutral_message_follows_the_profile(platform, make_agent, add_request):
+    _set_locales(platform, dependent="zh-TW")
+    add_request(amount=8, message="我要八元")
+    agent, maker, _ = make_agent([reply(finish("declined", "不行。"))])
+    agent.handle_request("r1")
+    assert "write reply_to_dependent in Traditional Chinese" in all_text(maker.calls[0]["messages"])
+
+
+def test_an_interview_question_in_the_wrong_language_falls_back(platform, maker_api):
+    from agent_layer.flows.policy import ChatTurn
+    from agent_layer.flows.policy_interview import InterviewAssessment, InterviewRequest, ItemReport, interview_turn
+    from tests.fakes import ScriptedLLM
+
+    llm = ScriptedLLM([InterviewAssessment(
+        items=[ItemReport(name="weekly_cap", status="stated", evidence_turn=0)],
+        next_questions=["What's the most for one request?"])])
+    body = InterviewRequest(guardian_id="g1", dependent_id="d1",
+                            conversation=[ChatTurn(role="guardian", text="給小美的，每週一百塊。")])
+    result = interview_turn(llm, maker_api, body)
+    assert result.question.startswith("在起草之前還需要了解幾件事")
+    assert "interview_language_corrected: zh-Hant" in result.guardrail_events
+
+
+def test_a_weekly_summary_in_the_wrong_script_falls_back(platform, maker_api):
+    from agent_layer.flows.scheduled import SummaryText, weekly_summary
+    from tests.fakes import ScriptedLLM
+
+    _set_locales(platform, guardian="zh-TW")
+    text = weekly_summary(ScriptedLLM([SummaryText(summary="这周一切正常，钱花得很合理。")]), maker_api, "d1", TODAY)
+    assert text.startswith("Mali本週共收到")

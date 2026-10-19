@@ -1,5 +1,6 @@
 # The agent service plus the in-memory mock platform with the demo family.
-#   ANTHROPIC_API_KEY=sk-... docker compose up --build
+#   ANTHROPIC_API_KEY=sk-... docker compose up --build                               (Claude)
+#   AGENT_LLM_PROVIDER=openrouter OPENROUTER_API_KEY=sk-or-... docker compose up --build  (OpenRouter)
 # Then follow walkthrough.md against http://localhost:8100 and http://localhost:8200.
 
 services:
@@ -25,11 +26,18 @@ services:
       PLATFORM_MAKER_TOKEN: maker-test-token
       PLATFORM_AUDITOR_TOKEN: auditor-test-token
       AGENT_INBOUND_TOKEN: ${AGENT_INBOUND_TOKEN:-change-me}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}
+      # The agent refuses to start without the key its provider needs.
+      AGENT_LLM_PROVIDER: ${AGENT_LLM_PROVIDER:-anthropic}
+      AGENT_MAKER_PROVIDER: ${AGENT_MAKER_PROVIDER:-}
+      AGENT_AUDITOR_PROVIDER: ${AGENT_AUDITOR_PROVIDER:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AGENT_OPENROUTER_VISION: ${AGENT_OPENROUTER_VISION:-0}
       AGENT_SCHEDULER: ${AGENT_SCHEDULER:-1}
       AGENT_CAMERA_ONLY_PROOFS: ${AGENT_CAMERA_ONLY_PROOFS:-0}
-      AGENT_MAKER_MODEL: ${AGENT_MAKER_MODEL:-claude-opus-5-5}
-      AGENT_AUDITOR_MODEL: ${AGENT_AUDITOR_MODEL:-claude-opus-5-5}
+      # Empty: the provider's default model.
+      AGENT_MAKER_MODEL: ${AGENT_MAKER_MODEL:-}
+      AGENT_AUDITOR_MODEL: ${AGENT_AUDITOR_MODEL:-}
     ports:
       - "8100:8100"
     # The sandbox resolves the platform's address once at startup, so the platform

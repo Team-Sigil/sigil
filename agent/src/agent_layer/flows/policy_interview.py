@@ -14,7 +14,8 @@ Protocol ``sigil.policy-interview/1`` (see policy-protocol.md):
   ``ready``      the guardian accepted the review, and the draft passes validation
 
 * An item counts as stated or confirmed only if the model cites a guardian turn that
-  exists. "Ready" needs the guardian's acceptance *after* a review turn. Neither the
+  exists. Required guidance can't be assumed: only the guardian can say it. "Ready" needs
+  the guardian's acceptance *after* a review turn. Neither the
   model nor this code can activate a policy: the guardian signs it in their wallet.
 """
 
@@ -32,7 +33,15 @@ from agent_layer.guardrails.budget import BudgetExhausted, TokenBudget
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import sanitize, wrap_untrusted
 from agent_layer.guardrails.output import screen_text
-from agent_layer.i18n import DEFAULT_LOCALE, LANGUAGE_NAMES, Locale, detect_locale, normalize_locale, t
+from agent_layer.i18n import (
+    DEFAULT_LOCALE,
+    LANGUAGE_NAMES,
+    Locale,
+    detect_locale,
+    language_mismatch,
+    normalize_locale,
+    t,
+)
 from agent_layer.llm import LLM, LLMUnavailable
 from agent_layer.platform_api import ID_PATTERN, MakerAPI
 
@@ -142,6 +151,9 @@ After each guardian message, report every checklist item:
   message.
 - status "confirmed": the guardian accepted a value you proposed; give evidence_turn.
 - status "assumed": you chose a sensible, conservative value they haven't confirmed.
+  Only limits can be assumed. Required guidance (always_fine, ask_first,
+  dependent_context) must come from the guardian: if they haven't said it, it's
+  "missing", and you ask about it.
 - status "missing": no value yet.
 Never mark an item stated or confirmed unless a guardian message actually says so.
 
@@ -207,6 +219,11 @@ def _normalise(reports: list[ItemReport], conversation: list[ChatTurn], draft: P
                 r = r.model_copy(update={"status": "assumed" if r.summary else "missing", "evidence_turn": None})
         if req.kind == "limit" and draft is not None and r.status == "missing":
             r = r.model_copy(update={"status": "assumed"})
+        if req.kind == "guidance" and req.required and r.status == "assumed":
+            # The guardian's intent can't be guessed: a default limit can be proposed for
+            # confirmation, but what's always fine or needs asking must come from them.
+            log.add("interview_guidance_not_assumed", req.name)
+            r = r.model_copy(update={"status": "missing"})
         out[req.name] = r
     return out
 
@@ -303,6 +320,9 @@ def interview_turn(
     missing = [r for r in required if items[r.name].status == "missing"]
     assumed = [r for r in REQUIREMENTS if items[r.name].status == "assumed" and (r.required or r.kind == "limit")]
     model_question = _question(assessment.next_questions, log)
+    if model_question and language_mismatch(model_question, locale):
+        log.add("interview_language_corrected", locale)
+        model_question = None  # the template below is in the guardian's language
 
     if draft is None or missing:
         names = ", ".join(t(f"interview.label.{r.name}", locale) for r in (missing or required))

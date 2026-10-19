@@ -3,7 +3,7 @@
 Two layers are tested:
 
 * static – the package source cannot reach a database, the filesystem, a subprocess
-  or a key library, and only ``platform_api`` / ``llm`` do network I/O;
+  or a key library, and only ``platform_api`` / ``llm`` / ``llm_openrouter`` do network I/O;
 * runtime – inside the audit-hook sandbox, a full request runs end to end over HTTP,
   while file reads/writes, subprocesses, DB drivers and other hosts are refused.
 """
@@ -27,7 +27,7 @@ FORBIDDEN_IMPORTS = {
     "solana", "solders", "spl", "nacl", "subprocess", "shutil", "pathlib", "tempfile", "socket",
     "requests", "urllib.request", "http.client", "pickle", "shelve", "ctypes",
 }
-NETWORK_MODULES = {"httpx": {"platform_api.py"}, "anthropic": {"llm.py"}}
+NETWORK_MODULES = {"httpx": {"platform_api.py", "llm_openrouter.py"}, "anthropic": {"llm.py"}}
 OS_ALLOWED = {"config.py", "sandbox.py", "__main__.py"}  # environment variables and the sandbox itself
 SOCKET_ALLOWED = {"sandbox.py"}  # pre-resolves allowlisted hosts
 

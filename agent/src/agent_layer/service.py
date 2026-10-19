@@ -13,12 +13,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_layer.auditor.auditor import Auditor
-from agent_layer.config import Settings
+from agent_layer.config import Provider, Settings
 from agent_layer.contracts import DecisionRecord, PolicyDraft, PolicyDraftValidation
 from agent_layer.flows.policy import ChatTurn, draft_policy
 from agent_layer.flows.policy_interview import InterviewRequest, InterviewTurn, interview_turn, protocol_description
 from agent_layer.i18n import DEFAULT_LOCALE, normalize_locale
 from agent_layer.llm import LLM, AnthropicLLM
+from agent_layer.llm_openrouter import OpenRouterLLM
 from agent_layer.maker.agent import MakerAgent
 from agent_layer.platform_api import AuditorAPI, MakerAPI, PlatformAPIError, ID_PATTERN
 from agent_layer.scheduler import Jobs
@@ -33,6 +34,16 @@ class AgentRuntime:
     jobs: Jobs
 
 
+def build_llm(settings: Settings, provider: Provider, model: str, effort: str) -> LLM:
+    """One agent's model, from the provider the settings name for it."""
+    if provider == "openrouter":
+        return OpenRouterLLM(
+            model, api_key=settings.openrouter_api_key, base_url=settings.openrouter_base_url,
+            effort=effort, max_tokens=settings.max_tokens, vision=settings.openrouter_vision,
+        )
+    return AnthropicLLM(model, effort=effort, max_tokens=settings.max_tokens)
+
+
 def build_runtime(
     settings: Settings,
     *,
@@ -41,9 +52,9 @@ def build_runtime(
     maker_api: MakerAPI | None = None,
     auditor_api: AuditorAPI | None = None,
 ) -> AgentRuntime:
-    maker_llm = maker_llm or AnthropicLLM(settings.maker_model, effort=settings.maker_effort, max_tokens=settings.max_tokens)
-    auditor_llm = auditor_llm or AnthropicLLM(
-        settings.auditor_model, effort=settings.auditor_effort, max_tokens=settings.max_tokens
+    maker_llm = maker_llm or build_llm(settings, settings.maker_provider, settings.maker_model, settings.maker_effort)
+    auditor_llm = auditor_llm or build_llm(
+        settings, settings.auditor_provider, settings.auditor_model, settings.auditor_effort
     )
     maker_api = maker_api or MakerAPI(settings.platform_base_url, settings.maker_token)
     auditor_api = auditor_api or AuditorAPI(settings.platform_base_url, settings.auditor_token)

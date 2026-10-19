@@ -109,7 +109,9 @@ class ProofView:
     qualifying_ids: list[str] = field(default_factory=list)  # proofs that count as proof
 
 
-def _proof_parts(proofs: list[Proof], request: DependentRequest, limits: Limits, log: GuardrailLog) -> ProofView:
+def _proof_parts(
+    proofs: list[Proof], request: DependentRequest, limits: Limits, log: GuardrailLog, *, images_readable: bool = True
+) -> ProofView:
     """Check each proof and decide whether it is shown, and whether it counts as proof.
 
     It counts only if it belongs to this request, its bytes match the platform's hash,
@@ -161,6 +163,14 @@ def _proof_parts(proofs: list[Proof], request: DependentRequest, limits: Limits,
             view.signals.append(PLATFORM_ANOMALY_SIGNAL)
             continue
 
+        if is_image and not images_readable:
+            # A text-only model can't check a receipt it can't see, so it mustn't vouch for it.
+            log.add("proof_unseen", proof.id)
+            view.notes.append(
+                "An image proof was attached, but you can't see images: don't describe or rely on it. It can't "
+                "be used as evidence, so anything that needs proof goes to the guardian."
+            )
+            continue
         index = str(len(view.texts) if not is_image else len(view.images))
         if is_image:
             view.images.append(
@@ -212,6 +222,8 @@ def prepare_request_input(
     proofs: list[Proof],
     limits: Limits,
     log: GuardrailLog,
+    *,
+    images_readable: bool = True,
 ) -> PreparedInput:
     pt = PlatformText(log)
     first = sanitize(request.message, max_chars=limits.max_message_chars, log=log, source="request")
@@ -243,7 +255,7 @@ def prepare_request_input(
                 "system_event", msg.text, max_chars=limits.max_event_chars, source="system_event",
             ))
 
-    pv = _proof_parts(proofs, request, limits, log)
+    pv = _proof_parts(proofs, request, limits, log, images_readable=images_readable)
     images, texts = pv.images, pv.texts
     signals.extend(pv.signals)
     proof_section = "\n".join(

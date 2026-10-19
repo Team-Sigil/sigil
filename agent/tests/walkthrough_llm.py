@@ -53,6 +53,7 @@ def _category(words: str) -> str:
 class WalkthroughLLM:
     def __init__(self, model: str = "walkthrough-model"):
         self.model = model
+        self.supports_images = True
 
     def create(self, *, system: str, messages: list[dict], tools: list[dict], timeout: float | None = None):
         last = messages[-1]["content"]

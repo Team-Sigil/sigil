@@ -1,8 +1,9 @@
 """Run the agent service: ``python -m agent_layer``.
 
 Environment: PLATFORM_API_URL, PLATFORM_MAKER_TOKEN, PLATFORM_AUDITOR_TOKEN,
-AGENT_INBOUND_TOKEN, ANTHROPIC_API_KEY (or another SDK credential source), and
-optionally AGENT_HOST / AGENT_PORT / AGENT_SCHEDULER=0.
+AGENT_INBOUND_TOKEN, and the model credentials: ANTHROPIC_API_KEY (or another SDK
+credential source) for Claude, OPENROUTER_API_KEY with AGENT_LLM_PROVIDER=openrouter.
+Optionally AGENT_HOST / AGENT_PORT / AGENT_SCHEDULER=0.
 """
 
 from __future__ import annotations
@@ -19,11 +20,19 @@ from agent_layer.scheduler import build_scheduler
 from agent_layer.service import build_runtime, create_app
 
 
+def allowed_hosts(settings: Settings) -> list[str]:
+    """The platform, plus the API host of each model provider in use, and nothing else."""
+    hosts = [urlparse(settings.platform_base_url).hostname or ""]
+    if "anthropic" in settings.providers:
+        hosts.append(urlparse(os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")).hostname or "")
+    if "openrouter" in settings.providers:
+        hosts.append(urlparse(settings.openrouter_base_url).hostname or "")
+    return [h for h in hosts if h]
+
+
 def main() -> None:
     settings = Settings.from_env()
-    platform_host = urlparse(settings.platform_base_url).hostname or ""
-    anthropic_host = urlparse(os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")).hostname or ""
-    install_sandbox(allowed_hosts=[platform_host, anthropic_host], allow_listen=True)
+    install_sandbox(allowed_hosts=allowed_hosts(settings), allow_listen=True)
 
     runtime = build_runtime(settings)
     scheduler = build_scheduler(runtime.jobs) if os.environ.get("AGENT_SCHEDULER", "1") != "0" else None

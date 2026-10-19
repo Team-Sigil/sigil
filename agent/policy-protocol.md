@@ -61,7 +61,10 @@ stateDiagram-v2
 Item statuses: `missing`, `assumed` (the agent chose a value), `stated` (the guardian
 said it), `confirmed` (the guardian accepted the agent's value). Stated and confirmed
 count as done. An optional *limit* the agent chose is still shown for confirmation;
-optional guidance can stay assumed.
+optional guidance can stay assumed. **Required guidance (`always_fine`, `ask_first`,
+`dependent_context`) can't be assumed:** only the guardian can say it, so if the model
+fills it in itself, code counts it as missing and the interview keeps asking. The agent
+may propose default limits, never the guardian's intent.
 
 ## Endpoints (agent service, inbound)
 

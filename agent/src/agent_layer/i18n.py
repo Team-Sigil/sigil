@@ -31,10 +31,49 @@ LANGUAGE_NAMES: dict[Locale, str] = {
 
 _HAN = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
 _LATIN = re.compile(r"[A-Za-z]")
-# Common characters that differ between the two scripts, aligned pair by pair.
-_SIMPLIFIED_ONLY = "们这钱买给说学书妈爷为么时过还没让发对会车来吗个东习费题问门气电话读应该礼机网级课业实现点张长开关银账欢乐见难谢请帮医紧"
-_TRADITIONAL_ONLY = "們這錢買給說學書媽爺為麼時過還沒讓發對會車來嗎個東習費題問門氣電話讀應該禮機網級課業實現點張長開關銀賬歡樂見難謝請幫醫緊"
-assert len(_SIMPLIFIED_ONLY) == len(_TRADITIONAL_ONLY)
+# Common characters written differently in the two scripts, as (Simplified, Traditional)
+# pairs. Only characters that exist in one script alone are listed (e.g. not 后/後, since 后
+# is also Traditional), so one hit is real evidence.
+_SCRIPT_PAIRS = (
+    "们們 这這 钱錢 买買 卖賣 给給 说說 学學 书書 妈媽 爷爺 为為 么麼 时時 过過 还還 没沒 让讓 发發 "
+    "对對 会會 车車 来來 吗嗎 个個 东東 习習 费費 题題 问問 门門 气氣 电電 话話 读讀 应應 该該 礼禮 "
+    "机機 网網 级級 课課 业業 实實 现現 点點 张張 长長 开開 关關 银銀 账賬 欢歡 乐樂 见見 难難 谢謝 "
+    "请請 帮幫 医醫 紧緊 经經 转轉 块塊 笔筆 记記 节節 饭飯 馆館 补補 钟鐘 头頭 爱愛 处處 动動 报報 "
+    "认認 识識 写寫 边邊 远遠 进進 运運 岁歲 儿兒 亲親 带帶 换換 种種 样樣 数數 单單 价價 务務 产產 "
+    "资資 设設 计計 视視 观觀 历歷 万萬 华華 国國 语語 词詞 页頁 场場 广廣 楼樓 线線 结結 统統 规規 "
+    "则則 简簡 体體 确確 认認 额額 余餘 剩賸 收收 据據 票票 购購 物物 买買 周週 预預 算算 零零 用用"
+).split()
+_SCRIPT_PAIRS = tuple(dict.fromkeys(p for p in _SCRIPT_PAIRS if p[0] != p[1]))  # drop identical pairs
+_SIMPLIFIED_ONLY = frozenset(p[0] for p in _SCRIPT_PAIRS)
+_TRADITIONAL_ONLY = frozenset(p[1] for p in _SCRIPT_PAIRS)
+assert all(len(p) == 2 for p in _SCRIPT_PAIRS) and not _SIMPLIFIED_ONLY & _TRADITIONAL_ONLY
+
+
+MIN_LATIN_FOR_MISMATCH = 8
+
+
+def chinese_script(text: str) -> Locale | None:
+    """Which Chinese script a text uses, or None when it has no characters that tell
+    (many common characters are the same in both)."""
+    simplified = sum(1 for c in text if c in _SIMPLIFIED_ONLY)
+    traditional = sum(1 for c in text if c in _TRADITIONAL_ONLY)
+    if simplified == traditional:
+        return None
+    return "zh-Hant" if traditional > simplified else "zh-Hans"
+
+
+def language_mismatch(text: str, expected: Locale) -> bool:
+    """True when a text is clearly not in the expected language or Chinese script. Unclear
+    texts (too short, or no characters that tell the scripts apart) are not mismatches."""
+    found = detect_locale(text)
+    if found is None:
+        return False
+    if found == "en" and len(_LATIN.findall(text)) < MIN_LATIN_FOR_MISMATCH:
+        return False  # "OK", "Hi", a name: too little to call it the wrong language
+    if expected == "en" or found == "en":
+        return found != expected
+    script = chinese_script(text)
+    return script is not None and script != expected
 
 
 def normalize_locale(tag: str | None) -> Locale | None:
@@ -63,9 +102,7 @@ def detect_locale(text: str) -> Locale | None:
     han = len(_HAN.findall(text))
     latin = len(_LATIN.findall(text))
     if han >= 2 and han * 4 >= latin:
-        simplified = sum(text.count(c) for c in _SIMPLIFIED_ONLY)
-        traditional = sum(text.count(c) for c in _TRADITIONAL_ONLY)
-        return "zh-Hant" if traditional > simplified else "zh-Hans"
+        return chinese_script(text) or "zh-Hans"  # no telling characters: the more common script
     if latin >= 2:
         return "en"
     return None
@@ -79,20 +116,34 @@ def _latest_dependent_text(request: DependentRequest) -> str:
 
 
 def dependent_locale(ctx: AgentContext, request: DependentRequest | None = None) -> Locale:
-    detected = detect_locale(_latest_dependent_text(request)) if request is not None else None
-    return detected or normalize_locale(ctx.dependent_locale) or DEFAULT_LOCALE
+    profile = normalize_locale(ctx.dependent_locale)
+    if request is None:
+        return profile or DEFAULT_LOCALE
+    text = _latest_dependent_text(request)
+    detected = detect_locale(text)
+    if detected in ("zh-Hans", "zh-Hant") and chinese_script(text) is None and profile in ("zh-Hans", "zh-Hant"):
+        return profile  # Chinese, but the message doesn't tell which script: the profile does
+    return detected or profile or DEFAULT_LOCALE
 
 
 def guardian_locale(ctx: AgentContext) -> Locale:
     return normalize_locale(ctx.guardian_locale) or detect_locale(ctx.policy.guidance) or DEFAULT_LOCALE
 
 
+_SCRIPT_HINT: dict[Locale, str] = {
+    "en": "",
+    "zh-Hans": " (Simplified characters such as 这、给、说、钱, never Traditional)",
+    "zh-Hant": " (Traditional characters such as 這、給、說、錢, never Simplified)",
+}
+
+
 def language_instruction(dependent: Locale, guardian: Locale) -> str:
-    """The language rule for the model, stated per run."""
+    """The language rule for the model, stated per run. Code checks the reply afterwards
+    (``language_mismatch``) and replaces one in the wrong language or script."""
     return (
-        f"Languages: write reply_to_dependent in {LANGUAGE_NAMES[dependent]}. Write "
-        f"summary_for_guardian, guardian questions and guardian notes in {LANGUAGE_NAMES[guardian]}. "
-        "Keep amounts as plain numbers (for example 12.50)."
+        f"Languages: write reply_to_dependent in {LANGUAGE_NAMES[dependent]}{_SCRIPT_HINT[dependent]}. "
+        f"Write summary_for_guardian, guardian questions and guardian notes in "
+        f"{LANGUAGE_NAMES[guardian]}{_SCRIPT_HINT[guardian]}. Keep amounts as plain numbers (for example 12.50)."
     )
 
 

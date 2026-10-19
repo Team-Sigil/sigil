@@ -26,7 +26,16 @@ from agent_layer.guardrails.budget import BudgetExhausted, TokenBudget
 from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import PlatformText, sanitize, wrap_untrusted
 from agent_layer.guardrails.output import screen_text
-from agent_layer.i18n import LANGUAGE_NAMES, Locale, category_label, dependent_locale, guardian_locale, t, weekday
+from agent_layer.i18n import (
+    LANGUAGE_NAMES,
+    Locale,
+    category_label,
+    dependent_locale,
+    guardian_locale,
+    language_mismatch,
+    t,
+    weekday,
+)
 from agent_layer.llm import LLM, LLMUnavailable
 from agent_layer.money import to_display
 from agent_layer.platform_api import MakerAPI
@@ -199,6 +208,9 @@ def weekly_summary(llm: LLM, api: MakerAPI, dependent_id: str, today: date, limi
         written = None
     if written is not None:
         written = screen_text(written, guidance="", max_chars=limits.max_summary_chars, log=log)
+    if written and language_mismatch(written, locale):
+        log.add("summary_language_corrected", locale)
+        written = None  # the fallback is in the guardian's language
     text = written or fallback
     if flags:
         text += f"\n\n{t('summary.worth_a_look', locale)}\n" + "\n".join(f"- {f}" for f in flags)
