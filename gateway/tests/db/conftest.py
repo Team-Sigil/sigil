@@ -1,0 +1,177 @@
+"""Fixtures for tests that need the docker-compose Postgres (`docker compose up -d postgres`).
+
+Connection URLs come from the environment or the repo-root `.env`. Without them, or when the
+database is unreachable, every test in this package is skipped rather than failed.
+"""
+
+import os
+import uuid
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
+
+import httpx
+import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from gateway.core.config import Settings
+from gateway.db.models import Base, Family, User
+from gateway.enums import Role
+from gateway.main import create_app
+from tests import signed_pdf
+from tests.db.world import AGENT_WALLET, MINT, World, build_world
+
+REPO_DIR = Path(__file__).resolve().parents[2]
+ROOT_ENV = REPO_DIR / ".env"
+
+
+def _env(name: str) -> str | None:
+    if name in os.environ:
+        return os.environ[name]
+    if ROOT_ENV.exists():
+        for line in ROOT_ENV.read_text().splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key.strip() == name:
+                return value.strip()
+    return None
+
+
+APP_URL = _env("TEST_DATABASE_URL")
+OWNER_URL = _env("TEST_DATABASE_URL_MIGRATIONS")
+SIGNER_RO_PASSWORD = _env("SIGIL_SIGNER_RO_PASSWORD")
+
+
+@pytest.fixture(scope="session")
+def migrated() -> Iterator[None]:
+    if not APP_URL or not OWNER_URL:
+        pytest.skip("TEST_DATABASE_URL / TEST_DATABASE_URL_MIGRATIONS not set")
+    try:
+        with create_engine(OWNER_URL).connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        pytest.skip(f"test database unreachable: {type(exc).__name__}")
+
+    config = Config(str(REPO_DIR / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", OWNER_URL.replace("%", "%%"))
+    command.upgrade(config, "head")
+    yield
+
+
+def _truncate_all() -> None:
+    assert OWNER_URL is not None
+    tables = ", ".join(t.name for t in Base.metadata.sorted_tables)
+    with create_engine(OWNER_URL).begin() as conn:
+        conn.execute(text("ALTER TABLE audit_log DISABLE TRIGGER USER"))
+        conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+        conn.execute(text("ALTER TABLE audit_log ENABLE TRIGGER USER"))
+
+
+@pytest.fixture
+async def app_engine(migrated: None) -> AsyncIterator[AsyncEngine]:
+    """Engine connected as the least-privileged app role, on a clean database."""
+    assert APP_URL is not None
+    _truncate_all()
+    engine = create_async_engine(APP_URL)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+async def owner_engine(migrated: None) -> AsyncIterator[AsyncEngine]:
+    assert OWNER_URL is not None
+    engine = create_async_engine(OWNER_URL)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+async def signer_engine(migrated: None) -> AsyncIterator[AsyncEngine]:
+    if not SIGNER_RO_PASSWORD or not APP_URL:
+        pytest.skip("SIGIL_SIGNER_RO_PASSWORD not set")
+    url = make_url(APP_URL).set(username="sigil_signer_ro", password=SIGNER_RO_PASSWORD)
+    engine = create_async_engine(url)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+def sessionmaker(app_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(app_engine, expire_on_commit=False)
+
+
+def _wallet() -> str:
+    # Unique 44-char placeholder; DB tests do not verify keys.
+    return uuid.uuid4().hex + uuid.uuid4().hex[:12]
+
+
+@pytest.fixture
+async def family(sessionmaker: async_sessionmaker[AsyncSession]) -> Family:
+    async with sessionmaker() as session:
+        guardian = User(wallet_address=_wallet(), role=Role.GUARDIAN)
+        dependent = User(wallet_address=_wallet(), role=Role.DEPENDENT)
+        session.add_all([guardian, dependent])
+        await session.flush()
+        family = Family(
+            guardian_user_id=guardian.id,
+            dependent_user_id=dependent.id,
+            dependent_token_account=_wallet(),
+            guardian_token_account=_wallet(),
+            registration_signature="sig",
+            registration_nonce="nonce",
+        )
+        session.add(family)
+        await session.commit()
+        return family
+
+
+@pytest.fixture
+async def world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
+    return await build_world(sessionmaker)
+
+
+@pytest.fixture(scope="session")
+def receipt_root(tmp_path_factory: pytest.TempPathFactory) -> tuple[signed_pdf.Issued, Path]:
+    """A throwaway certificate that stands in for the shop's receipt-signing root."""
+    issued = signed_pdf.root()
+    path = tmp_path_factory.mktemp("pdf") / "roots.pem"
+    path.write_bytes(signed_pdf.roots_pem(issued.certificate))
+    return issued, path
+
+
+@pytest.fixture
+def signed_receipt(receipt_root: tuple[signed_pdf.Issued, Path]) -> bytes:
+    """A PDF receipt signed by a certificate the gateway is configured to trust."""
+    issued, _ = receipt_root
+    return signed_pdf.build(signed_pdf.signer(issued))
+
+
+@pytest.fixture
+async def app_client(
+    world: World, receipt_root: tuple[signed_pdf.Issued, Path]
+) -> AsyncIterator[httpx.AsyncClient]:
+    """The whole gateway app on the test database, with the world's fake crypto layer."""
+    settings = Settings(
+        agent_wallet_pubkey=AGENT_WALLET,
+        ausd_mint=MINT,
+        pdf_trusted_roots_path=receipt_root[1],
+        # The test receipts' signer (tests/signed_pdf.py), not the real Lazada name.
+        pdf_allowed_signers="Lazada",
+    )
+    app = create_app(
+        settings=settings,
+        sessionmaker=world.sessionmaker,
+        crypto=world.crypto,
+        agent=world.agent,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+    ) as client:
+        yield client
