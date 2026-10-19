@@ -302,7 +302,8 @@ class MakerAgent:
             case "notify_guardian":
                 assert isinstance(args, NotifyGuardianArgs)
                 self._api.notify(
-                    Notification(audience="guardian", recipient_id=run.ctx.guardian_id, message=args.message)
+                    Notification(audience="guardian", recipient_id=run.ctx.guardian_id, message=args.message,
+                                 dependent_id=run.ctx.dependent_id)
                 )
                 return "Note sent."
             case "finish":

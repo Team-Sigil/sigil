@@ -1,14 +1,54 @@
 # Gateway handoff: open items for the gateway layer
 
-For Julian (gateway layer). This is everything the agent layer needs from the gateway,
-from reviewing `sigil-gateway` at `6810508` against the agent layer's current contract.
+For Julian (gateway layer). This is everything the agent layer needs from the gateway.
+
+## Round 2 (2026-10-19): review of `c569749`
+
+Items 1–11 below are done. We checked them in the code and ran your unit tests against
+the agent layer's `src/` with `AGENT_LAYER_SRC` and `CI=1`: 168 pass, including both
+parity tests. Your 178 database tests weren't run on our side (no Postgres here).
+
+**Your proposal A (`dependent_id` on guardian notifications): accepted.** It's in the
+agent contract now: `Notification.dependent_id: str | None = None`. The agent sets it on
+the weekly summary and on the maker's `notify_guardian`, and leaves it `None` for
+anything about the shared reservoir (that goes out as a guardian question anyway).
+Re-copy `contracts.py`; your parity test fails until you do. The agent layer's mock
+refuses a `dependent_id` that isn't the recipient guardian's (`422`), as you described.
+
+**Item 9 is now used.** The Auditor reads `GET /dependents/{id}/context` with its own
+token on every review and flags at once, without calling the model, if the maker's
+snapshot names a different policy (version, hash or content), dependent or guardian, or
+if the family is frozen. Your route already accepts the Auditor's token, so nothing is
+needed for this.
+
+| # | New item | Priority | Contract change |
+|---|---|---|---|
+| 12 | [Auditor read access to the request and its proofs](#12-auditor-read-access-to-the-request-and-its-proofs) | P2 | No (auth only) |
+
+### 12. Auditor read access to the request and its proofs
+
+The Auditor still gets the dependent's words and the proofs from the maker's run. A
+compromised maker could reshape the story the Auditor judges (the engine's limits and
+proof rules hold either way). To close this, let the Auditor's token read, read-only:
+
+- `GET /agent/v1/requests/{id}`
+- `GET /agent/v1/proofs/{id}`
+
+Same scoping as the context route: only for dependents the platform knows, nothing
+else. Once both accept the Auditor's token, the agent layer will have the Auditor fetch
+and sanitise the request and proofs itself, the same way it now does the context.
+
+---
+
+## Round 1 (2026-10-18): review of `6810508`
+
 Items are ranked; P0 is a money-safety bug.
 
 The agent layer's `mock_platform/app.py` implements every engine change below as a
 reference, with tests in `tests/test_engine_alignment.py` and `tests/test_proofs.py`.
 Proof and upload details are in [proof-images.md](proof-images.md).
 
-## Summary
+### Summary (all done in round 2)
 
 | # | Item | Priority | Contract change |
 |---|---|---|---|
@@ -32,7 +72,7 @@ rate and token limits.
 
 ---
 
-## 1. Pending transfers can pay twice
+### 1. Pending transfers can pay twice
 
 **What happens today.**
 
@@ -68,7 +108,7 @@ way, doesn't ask the guardian, and refuses to send again while `already_sent +
 already_pending` covers the request. That's defense in depth; the engine rule is the one
 that has to hold.
 
-## 2. Re-copy the agent contract
+### 2. Re-copy the agent contract
 
 `agent_layer/contracts.py` has four additive changes. Copy it to
 `gateway/contracts/agent.py`; with the agent layer checked out, the parity test currently
@@ -84,7 +124,7 @@ fails on them, as it should.
 The app needs a `transfer_pending` state: "on its way", with no retry button (see the
 agent's `guide.md`, Outcomes).
 
-## 3. Expose signed guardian overrides
+### 3. Expose signed guardian overrides
 
 The engine lets exactly the signed amount past checks 7, 8 and 11. The agent couldn't use
 that: its tool guard refused anything over the per-request max or the weekly budget, and
@@ -100,7 +140,7 @@ weekly checks and the Auditor, and logs `guardian_override`. Freeze, blocked cat
 the reservoir, the requested amount and proof still apply, matching your engine. The
 engine re-verifies the signature, so a wrong field can't move money the engine wouldn't.
 
-## 4. Normalise proof images at upload
+### 4. Normalise proof images at upload
 
 Your known gap 2. Uploads are typed and hashed, but stored as sent. Phone photos carry
 EXIF metadata, often with GPS location, and the dependent may be a minor.
@@ -117,7 +157,7 @@ At `POST /api/v1/requests/{id}/proofs`:
 4. Store `size_bytes` and `sha256` of the **stored** bytes (the agent checks both), and
    keep the original encrypted if it's needed as evidence.
 
-## 5. Parity tests skip silently
+### 5. Parity tests skip silently
 
 `tests/test_contracts.py`, `tests/test_engine_triggers.py` and
 `tests/db/test_agent_layer_clients.py` skip unless the agent layer is at
@@ -126,7 +166,7 @@ check at all. Read the path from an env var (for example `AGENT_LAYER_SRC`), and
 instead of skipping when `CI` is set. With the path pointed at the agent repo, all 131
 unit tests passed before the contract changes in item 2.
 
-## 6. More proof integrity flags
+### 6. More proof integrity flags
 
 Today the gateway sets only `duplicate` (exact SHA-256 match in the family). The agent
 also understands these flags; any flag it doesn't know is ignored.
@@ -143,7 +183,7 @@ Also worth doing: a **receipt fingerprint shared across families** (merchant + d
 total + receipt number, stored as a keyed hash), so the same receipt can't be used by two
 families. Today `used_proof_keys` is per family.
 
-## 7. Verified in-app capture and camera-only
+### 7. Verified in-app capture and camera-only
 
 Your known gap 3, and the strongest defense against forged receipts. The design is in
 `proof-images.md` ("Verified in-app capture"). The gateway's part:
@@ -160,7 +200,7 @@ Your known gap 3, and the strongest defense against forged receipts. The design 
   `counts_as_proof` in `mock_platform/app.py`). Turn it on together with the agent's
   `AGENT_CAMERA_ONLY_PROOFS`; until both are on, keep both off.
 
-## 8. Daily request quota per dependent
+### 8. Daily request quota per dependent
 
 Every dependent message runs Claude Opus at high effort, including off-topic ones ("what
 is 1+1?"). The gateway limits 30 calls per minute per token and 200,000 LLM tokens per
@@ -168,14 +208,14 @@ family per day, but not the number of requests a day. SPEC §7 has
 `max_requests_per_day` for this. Suggestion: a per-dependent daily cap on new requests
 and messages, with a clear "try again tomorrow" error for the app.
 
-## 9. Auditor read access to context
+### 9. Auditor read access to context
 
 The agent layer's known gap 1: the Auditor reviews the maker's snapshot instead of
 reading context itself, so a compromised maker could feed it doctored history. Fixing it
 needs the gateway to accept the **Auditor's** token on `GET /dependents/{id}/context`,
 read-only. No change needed yet; flagging it so the auth rules leave room.
 
-## 10. Link decisions to transfers
+### 10. Link decisions to transfers
 
 The agent layer's known gap 3: `DecisionRecord` doesn't carry the engine's decision id
 or `tx_signature`, so the audit trail can't join a decision to its transfer directly.
@@ -183,7 +223,7 @@ The gateway already returns `decision_id` from `POST /decisions`. Options: the g
 links them by request and time, or the agent adds the transfer's `decision_id` to
 `DecisionRecord` (a contract change). Your call on which is simpler.
 
-## 11. Policy interview
+### 11. Policy interview
 
 New: the agent can interview the guardian until the policy is complete, instead of
 drafting from one message. Protocol and examples: [policy-protocol.md](policy-protocol.md).
@@ -203,7 +243,7 @@ The gateway's part:
 
 ---
 
-## Answers to your README questions
+### Answers to your README questions
 
 - **Allowance cap.** Agreed: the agent now caps the allowance at the signed amount (1.0×,
   down from 1.5×). Lowering it is fine; for more, the model sends the usual amount and
@@ -213,7 +253,7 @@ The gateway's part:
   like other platform text. Once item 3 ships, the wording no longer matters for money:
   the agent takes the amount from the field, never from the text.
 
-## Timeouts
+### Timeouts
 
 The agent now caps every run at **150 s** (`AGENT_MAX_RUN_SECONDS`), under your 180 s
 `PROCESS_TIMEOUT_SECONDS`. Each Claude call gets the time left as its timeout, with one
@@ -221,7 +261,7 @@ retry; when time runs out the run ends in `safe_fallback` (or `transfer_pending`
 `sent_*` if money already moved). Keep your timeout above the agent's cap if either
 changes.
 
-## Not verified from the agent side
+### Not verified from the agent side
 
 Your 121 database tests, including the end-to-end runs with the agent layer's
 `MakerAPI`, need Postgres and weren't run in this review. Please run them after items 1–3.

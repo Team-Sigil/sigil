@@ -370,6 +370,9 @@ class MockPlatform:
             if caller(authorization) != "maker":
                 raise HTTPException(403, "maker credential required")
 
+        def agent_any(authorization: str) -> None:
+            caller(authorization)  # maker or Auditor (the Auditor reads context, read-only)
+
         @app.middleware("http")
         async def log_requests(request: Request, call_next):
             auth = request.headers.get("authorization", "")
@@ -387,7 +390,7 @@ class MockPlatform:
 
         @app.get(base + "/dependents/{dep}/context")
         def get_context(dep: str, authorization: str = Header("")) -> AgentContext:
-            maker_only(authorization)
+            agent_any(authorization)
             if dep not in p.dependents:
                 raise HTTPException(404, "no such dependent")
             return p.context(dep)
@@ -478,6 +481,10 @@ class MockPlatform:
         @app.post(base + "/notifications")
         def notifications(body: Notification, authorization: str = Header("")) -> dict:
             maker_only(authorization)
+            if body.dependent_id is not None:
+                d = p.dependents.get(body.dependent_id)
+                if body.audience != "guardian" or d is None or d.guardian_id != body.recipient_id:
+                    raise HTTPException(422, "dependent_id must be one of the recipient guardian's dependents")
             if body.dedupe_key is None:
                 p.undeduped_notifications.append(body)
                 return {"id": p._next("note")}

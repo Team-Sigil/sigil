@@ -1,7 +1,12 @@
 """The Auditor agent (checker).
 
 It reviews a proposed transfer in two phases inside one conversation: an independent
-assessment of the raw case first, then a verdict on the maker's decision. It is
+assessment of the raw case first, then a verdict on the maker's decision.
+
+It reads the dependent's context (policy, guidance, budget, history) itself, with its own
+token, rather than trusting the maker's snapshot: a compromised maker can't feed it a
+doctored policy or history. If the maker's policy differs from the platform's, or the
+family is frozen, it flags without calling the model. It is
 monotonic (can only make an outcome stricter) and fails closed (any error is a flag).
 Its verdict is posted with the Auditor's own credential and bound to one exact
 transfer (idempotency key + amount + category).
@@ -31,9 +36,25 @@ from agent_layer.money import to_display
 from agent_layer.platform_api import AuditorAPI, PlatformAPIError
 
 
+class ContextConflict(Exception):
+    """The maker's view of the policy doesn't match the platform's."""
+
+
+def _policy_conflict(maker: AgentContext, own: AgentContext) -> str | None:
+    if (own.dependent_id, own.guardian_id) != (maker.dependent_id, maker.guardian_id):
+        return "identity"
+    if own.frozen:
+        return "frozen"
+    if (own.policy.version, own.policy.policy_hash) != (maker.policy.version, maker.policy.policy_hash):
+        return "policy_version"
+    if own.policy != maker.policy:  # same version, different content: the snapshot was altered
+        return "policy_content"
+    return None
+
+
 @dataclass(frozen=True)
 class ReviewCase:
-    ctx: AgentContext
+    ctx: AgentContext  # the maker's snapshot: only used to check against the Auditor's own read
     request_id: str | None
     case_text: str  # already sanitised: the dependent's words, or the scheduled trigger
     proof_texts: list[str]
@@ -69,8 +90,8 @@ class Auditor:
         self._api = api
         self._limits = limits or Limits()
 
-    def _case_message(self, case: ReviewCase, pt: PlatformText) -> str:
-        ctx, p, limits = case.ctx, case.ctx.policy, self._limits
+    def _case_message(self, case: ReviewCase, ctx: AgentContext, pt: PlatformText) -> str:
+        p, limits = ctx.policy, self._limits
         proofs = "\n".join(
             wrap_untrusted("untrusted_proof", t, index=str(i)) for i, t in enumerate(case.proof_texts)
         ) or ("(see attached images)" if case.proof_images else "(no proof provided)")
@@ -109,8 +130,12 @@ class Auditor:
         assessment: IndependentAssessment | None = None
         pt = PlatformText(log)
         try:
+            own = self._api.get_context(case.ctx.dependent_id)
+            if conflict := _policy_conflict(case.ctx, own):
+                log.add("auditor_context_mismatch", conflict)
+                raise ContextConflict(conflict)
             budget.ensure_available()
-            content = [*case.proof_images, {"type": "text", "text": self._case_message(case, pt)}]
+            content = [*case.proof_images, {"type": "text", "text": self._case_message(case, own, pt)}]
             messages: list[dict] = [{"role": "user", "content": content}]
             first = self._llm.parse(
                 system=AUDITOR_SYSTEM, messages=messages, output_format=IndependentAssessment,
@@ -133,6 +158,12 @@ class Auditor:
             if second.parsed is None or second.response.stop_reason == "refusal":
                 raise LLMUnavailable("no verdict")
             verdict = second.parsed
+        except ContextConflict as exc:
+            verdict = _flag(
+                "The family is frozen." if str(exc) == "frozen" else
+                "The policy the agent used doesn't match the guardian's signed policy, so the guardian "
+                "should decide."
+            )
         except (LLMUnavailable, BudgetExhausted, PlatformAPIError) as exc:
             log.add("auditor_fail_closed", type(exc).__name__)
             verdict = _flag("The Auditor could not complete its review, so the guardian should decide.")

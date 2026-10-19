@@ -41,7 +41,7 @@ chooses a recipient, changes policy or writes to a database.
 | `ask_for_proof(kind, reason)` | `POST /proof-requests` | Request mode only |
 | `ask_guardian(question, recommendation, recommended_amount, urgency)` | `POST /guardian-questions` | At most one per run |
 | `propose_policy_update(change, evidence)` | `POST /policy-proposals` | Takes effect only if the guardian signs it |
-| `notify_guardian(message)` | `POST /notifications` | Informational note |
+| `notify_guardian(message)` | `POST /notifications` | Informational note, filed under the dependent (`dependent_id`) |
 | `finish(outcome, reply_to_dependent, summary_for_guardian)` | `POST /decisions` | Ends every run. Code corrects the outcome if it doesn't match what happened, and checks the reply before recording it |
 
 Code-only outputs: pace warnings and the weekly summary (`POST /notifications`),
@@ -57,16 +57,18 @@ talks to the dependent or calls the engine.
 | | |
 |---|---|
 | **Triggers** | Engine-verifiable: amount ≥ review threshold, emergency claimed, amount over 2× the usual, new category, allowance above usual. Agent-side (can only add reviews): category confidence < 0.7, manipulation signals in the input |
-| **Inputs, phase 1** | The dependent's words, proof (text and images), guidance, budget, recent history, and why it is reviewing. Not the maker's reasoning |
+| **Inputs, phase 1** | Read by the Auditor itself with its own token: the policy, guidance, budget and recent history (`GET /dependents/{id}/context`). From the maker's run: the dependent's words, proof (text and images) and why it is reviewing. Not the maker's reasoning |
 | **Inputs, phase 2** | The maker's amount, category, confidence, purpose and reasoning |
 | **Output** | `agree`, or `flag` with a reason and concerns, posted with the Auditor's own token to `POST /auditor/verdicts` and bound to the transfer's idempotency key, amount and category |
 | **On a flag** | No money moves; the maker's code asks the guardian with both views (`POST /guardian-questions`) |
-| **On failure** | Any error, refusal, exhausted budget or unrecordable verdict counts as a flag |
+| **Context check** | Before calling the model, it compares its own read with the maker's snapshot: a different policy (version, hash or content), another dependent or guardian, or a freeze during the run is flagged at once (`auditor_context_mismatch`) |
+| **On failure** | Any error, refusal, exhausted budget, unreadable context or unrecordable verdict counts as a flag |
 
 ### Where the data lives
 
-The agent layer stores nothing. Each run reads a snapshot from the platform API; in this
-repo the platform is the in-memory mock, so all state is lost on restart.
+The agent layer stores nothing. Each run reads a snapshot from the platform API; the
+Auditor reads its own copy of the context. In this repo the platform is the in-memory
+mock, so all state is lost on restart.
 
 ```mermaid
 flowchart LR
@@ -80,7 +82,7 @@ flowchart LR
         AU["Auditor agent"]
         SVC --> MK
         MK --> SNAP
-        SNAP -. "passed in-process (gap 1)" .-> AU
+        SNAP -. "checked against the Auditor's own read" .-> AU
     end
 
     subgraph PL["Mock platform: in-memory, lost on restart"]
@@ -92,7 +94,7 @@ flowchart LR
         TX["transfers{}<br/>keyed by idempotency key"]
         VER["verdicts{}"]
         DEC["decisions[]"]
-        DEC -. "never becomes history (gap 2)" .-> HIS
+        DEC -. "out_of_scope only (mock)" .-> HIS
     end
 
     GW -->|"process request"| SVC
@@ -101,6 +103,7 @@ flowchart LR
     MK -->|"GET /context"| HIS
     MK -->|"GET /requests, /proofs"| REQ
     MK -->|"POST /transfers"| TX
+    AU -->|"GET /context<br/>(auditor token)"| POL
     AU -->|"POST /auditor/verdicts<br/>(auditor token)"| VER
     MK -->|"POST /decisions"| DEC
     TX -->|"engine updates on send"| BUD
@@ -110,8 +113,9 @@ flowchart LR
 
 ### One request, from start to finish
 
-The snapshot is read once at the start. The engine re-checks every transfer against its
-*current* state, which is what catches a freeze or policy change mid-run.
+The snapshot is read once at the start. The Auditor reads the context again for itself,
+and the engine re-checks every transfer against its *current* state, which is what
+catches a freeze or policy change mid-run.
 
 ```mermaid
 sequenceDiagram
@@ -137,7 +141,10 @@ sequenceDiagram
     Note over MK: ToolGuard pre-checks against the snapshot<br/>(limits, budget, reservoir, proof, over-requested)
 
     alt review triggers fire
-        MK->>AU: ReviewCase (snapshot passed in-process)
+        MK->>AU: ReviewCase (request, proofs, maker's decision)
+        AU->>PL: GET /dependents/d1/context (auditor token)
+        PL-->>AU: policy, guidance, budget, history
+        Note over AU: Policy differs from the maker's,<br/>or frozen: flag, no model call
         AU->>LLM: phase 1: raw case, no maker reasoning
         LLM-->>AU: independent assessment
         AU->>LLM: phase 2: maker's decision
@@ -160,40 +167,34 @@ sequenceDiagram
     MK->>LLM: tool_result
     LLM-->>MK: finish(outcome, reply)
     Note over MK: Outcome reconciled with facts.<br/>Reply checked for leaks.
-    MK->>PL: POST /decisions (no tx link: gap 3)
+    MK->>PL: POST /decisions (the gateway links it to the transfer)
     MK-->>GW: DecisionRecord
 ```
 
 ### Known gaps
 
-1. **The Auditor doesn't fetch its own context.** It receives the maker's snapshot
-   in-process, so a compromised maker could feed it a doctored history or guidance. The
-   engine's limits still hold, but the intent check could be fooled. Fix: the Auditor
-   reads context with its own token.
-2. **History only records money events.** Declines and guardian questions are written
-   to `POST /decisions` but never appear in `history`, so the next run can't see them.
-   The real engine should build history from the decision log. (The mock does this for
-   `out_of_scope` only, as a `kind: "out_of_scope"` item, so the weekly flag can be
-   tested.)
-3. **The decision record doesn't link to the transaction.** `DecisionRecord` lacks the
-   engine's `decision_id` and the `tx_signature` that the audit trail needs.
-4. **No guardian answers in threads.** `guardian_answer` messages exist in the contract,
-   but neither the mock nor its admin routes can add one, so "the guardian answered, now
-   continue" isn't testable end to end.
-5. **No image dimension or content checks.** The agent checks a proof's type label,
-   base64 and exact size, but cannot read dimensions or confirm the bytes match
-   `media_type`, and nothing strips EXIF/GPS metadata. Proposal: the platform normalises
-   images at upload. See [proof-images.md](proof-images.md).
-6. **Proof images are re-sent and re-billed on every model turn.** Only the system
+1. **The Auditor still gets the request and proofs from the maker.** It reads the policy,
+   guidance, budget and history itself and flags any mismatch with the maker's snapshot,
+   but the dependent's words and the proofs come from the maker's run, so a compromised
+   maker could still reshape the story the Auditor judges. The engine's limits and proof
+   rules hold either way. Fix: the platform lets the Auditor's token read
+   `GET /requests/{id}` and `GET /proofs/{id}` (asked in
+   [gateway-handoff.md](gateway-handoff.md)).
+2. **The mock platform is simpler than the gateway.** The gateway builds history from the
+   decision log, puts signed guardian answers in the thread, links decisions to
+   transfers, normalises proof images and sets their integrity flags, enforces a daily
+   message quota and supports several dependents per guardian. The mock does none of
+   this (except history for `out_of_scope`), so those paths are tested in the gateway,
+   not here.
+3. **Proof images are re-sent and re-billed on every model turn.** Only the system
    prompt is cached. A cache breakpoint on the first user turn would make re-sends
    cache reads. See [proof-images.md](proof-images.md).
-7. **No body size limit on the inbound API.** FastAPI/uvicorn read the whole request
-   body before validating it. Set a limit in the gateway or a reverse proxy.
-8. **Proof forgery is limited, not solved.** The agent and engine catch mis-paired,
-   typed, tampered and reused proofs, but a convincing fake from a new shop still gets
-   through, up to `max_per_request`. Near-duplicate detection (perceptual hashing) and
-   metadata flags are the platform's job and aren't in the mock. See
-   [proof-images.md](proof-images.md#proof-integrity).
+4. **Proof forgery is limited, not solved.** The agent and engine catch mis-paired,
+   typed, tampered and reused proofs, and the gateway flags near-duplicates and
+   suspicious metadata, but a convincing fake from a new shop still gets through, up to
+   `max_per_request`. See [proof-images.md](proof-images.md#proof-integrity).
+5. **The inbound API has no body size limit of its own.** Run the agent service only
+   behind the gateway, which limits bodies and rates; don't expose it directly.
 
 ### Differences from the architecture doc
 
@@ -215,7 +216,7 @@ decision log) is an HTTP call to the platform API in
 |---|---|---|
 | Static | No DB drivers, key libraries, subprocess, file or socket APIs in the package; only `platform_api.py` (and `llm.py` for Claude) do network I/O | `tests/test_isolation.py` |
 | Runtime | [`sandbox.py`](src/agent_layer/sandbox.py) installs a CPython audit hook: no file writes, reads only under code roots, no subprocess/ctypes/SQLite, no DB-driver imports, DNS and connections only to allowlisted hosts | `tests/test_isolation.py` (full request run inside the sandbox) |
-| Credentials | The maker and the Auditor use separate platform tokens; only the Auditor's token can post a verdict | `tests/test_auditor.py` |
+| Credentials | The maker and the Auditor use separate platform tokens. The Auditor's token can only read a dependent's context and post a verdict; only it can post one | `tests/test_auditor.py` |
 
 Production should add container-level isolation too (read-only filesystem, egress
 firewall, no DB credentials in the agent's environment).
@@ -291,10 +292,11 @@ All under `/agent/v1`, bearer-authenticated. Money is integer base units (6 deci
 
 | Method | Path | Token |
 |---|---|---|
-| GET | `/dependents`, `/dependents/{id}/context`, `/dependents/{id}/weekly-activity` | maker |
+| GET | `/dependents/{id}/context` | maker, **Auditor** (read-only) |
+| GET | `/dependents`, `/dependents/{id}/weekly-activity` | maker |
 | GET | `/requests/{id}`, `/proofs/{id}`, `/guardians/{id}/answers`, `/usage/{family}` | maker |
 | POST | `/transfers` (with `Idempotency-Key` header; no recipient field) | maker |
-| POST | `/guardian-questions`, `/proof-requests`, `/policy-proposals`, `/notifications` (deduped by `dedupe_key`) | maker |
+| POST | `/guardian-questions`, `/proof-requests`, `/policy-proposals`, `/notifications` (deduped by `dedupe_key`; a guardian note may name the `dependent_id` it's about, which must be one of that guardian's dependents) | maker |
 | POST | `/decisions`, `/events`, `/usage`, `/policy-drafts/validate` | maker |
 | POST | `/auditor/verdicts` | **auditor only** |
 

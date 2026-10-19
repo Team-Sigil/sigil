@@ -208,6 +208,7 @@ def weekly_summary(llm: LLM, api: MakerAPI, dependent_id: str, today: date, limi
             recipient_id=ctx.guardian_id,
             message=text,
             dedupe_key=f"summary:{dependent_id}:{week_key(today)}",
+            dependent_id=dependent_id,
         )
     )
     return text

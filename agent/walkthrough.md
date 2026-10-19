@@ -84,8 +84,17 @@ http :8200/agent/v1/dependents/d1/context
 ```
 
 ```bash
-http :8200/agent/v1/dependents/d1/context "Authorization:Bearer auditor-test-token"
+http :8200/agent/v1/dependents "Authorization:Bearer auditor-test-token"
 # expect: 403
+```
+
+The one thing the Auditor's token can read is a dependent's context, so the Auditor
+reviews against the platform's copy of the policy and history, not the maker's:
+
+```bash
+http :8200/agent/v1/dependents/d1/context "Authorization:Bearer auditor-test-token"
+# expect: 200
+# body contains: "weekly_cap":100000000
 ```
 
 ## 3. A routine request

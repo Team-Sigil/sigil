@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+import pytest
+
 from agent_layer.contracts import Category, GuardianAnswer, HistoryItem, Outcome
 from agent_layer.flows.scheduled import (
     SummaryText,
@@ -161,3 +163,33 @@ def test_scheduler_registers_every_job(platform, make_agent, maker_api):
     scheduler = build_scheduler(Jobs(agent, maker_api, llm))
     assert {j.id for j in scheduler.get_jobs()} == set(SCHEDULE)
     assert all(j.max_instances == 1 for j in scheduler.get_jobs())
+
+
+# ------------------------------------------- guardian notes name their dependent
+
+
+def test_weekly_summary_names_its_dependent(platform, maker_api):
+    from agent_layer.flows.scheduled import SummaryText, weekly_summary
+
+    weekly_summary(ScriptedLLM([SummaryText(summary="A calm week.")]), maker_api, "d1", TODAY)
+    (note,) = [n for n in platform.notifications.values() if n.dedupe_key.startswith("summary:")]
+    assert (note.audience, note.recipient_id, note.dependent_id) == ("guardian", "g1", "d1")
+
+
+def test_reservoir_question_is_not_a_notification(platform, maker_api):
+    """The reservoir is shared by all of a guardian's dependents: it goes out as a guardian
+    question, never as a note filed under one dependent."""
+    platform.delegated["g1"] = T(40)
+    reservoir_check(maker_api, TODAY)
+    assert platform.notifications == {} and len(platform.questions) == 1
+
+
+def test_platform_refuses_a_note_about_another_guardians_dependent(platform, maker_api):
+    from agent_layer.contracts import Notification
+    from agent_layer.platform_api import PlatformAPIError
+
+    with pytest.raises(PlatformAPIError) as exc:
+        maker_api.notify(Notification(audience="guardian", recipient_id="g-other", message="hi", dependent_id="d1"))
+    assert exc.value.status == 422
+    with pytest.raises(PlatformAPIError):
+        maker_api.notify(Notification(audience="dependent", recipient_id="d1", message="hi", dependent_id="d1"))

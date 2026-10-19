@@ -264,3 +264,14 @@ def test_tool_calls_after_finish_are_ignored(platform, make_agent, add_request):
     agent, *_ = make_agent([reply(finish("declined", "No."), transfer(10))])
     record = agent.handle_request("r1")
     assert record.outcome is Outcome.DECLINED and platform.sent == []
+
+
+def test_notify_guardian_names_the_dependent(platform, make_agent, add_request):
+    add_request(amount=10)
+    agent, *_ = make_agent([
+        reply(tool_use("notify_guardian", message="Mali has asked for school money three times today.")),
+        reply(finish("declined", "Not this time.")),
+    ])
+    agent.handle_request("r1")
+    (note,) = platform.undeduped_notifications
+    assert (note.audience, note.recipient_id, note.dependent_id) == ("guardian", "g1", "d1")

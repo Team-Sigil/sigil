@@ -8,8 +8,9 @@ Two credentials, two clients:
 
 * ``MakerAPI`` – used by the main agent. It can read context and *request* actions;
   the engine decides whether they happen.
-* ``AuditorAPI`` – used only by the Auditor. Its single write is posting a verdict, so
-  a compromised maker (holding only the maker token) cannot forge an "agree".
+* ``AuditorAPI`` – used only by the Auditor. It reads the dependent's context itself and
+  its single write is posting a verdict, so a compromised maker (holding only the maker
+  token) can neither forge an "agree" nor feed the Auditor a doctored policy or history.
 
 Responses are not trusted either: a body over ``MAX_RESPONSE_BYTES``, invalid JSON or
 anything outside the contract raises ``PlatformAPIError``, so the run fails closed.
@@ -207,5 +208,10 @@ class MakerAPI(_Client):
 
 
 class AuditorAPI(_Client):
+    def get_context(self, dependent_id: str) -> AgentContext:
+        """The Auditor reads the dependent's context itself, with its own token, instead of
+        trusting the maker's snapshot (read-only; the only read the Auditor's token has)."""
+        return self._request("GET", f"/dependents/{_id(dependent_id)}/context", AgentContext, retries=2)
+
     def submit_verdict(self, submission: VerdictSubmission) -> VerdictReceipt:
         return self._request("POST", "/auditor/verdicts", VerdictReceipt, json=submission)

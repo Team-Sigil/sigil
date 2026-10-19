@@ -332,6 +332,10 @@ class Notification(_Strict):
     recipient_id: str
     message: str
     dedupe_key: str | None = None
+    # For a guardian note about one dependent (the weekly summary, the maker's
+    # notify_guardian); None = about all of them (e.g. the shared reservoir). The platform
+    # refuses a dependent that isn't the guardian's.
+    dependent_id: str | None = None
 
 
 class DecisionRecord(_Strict):
