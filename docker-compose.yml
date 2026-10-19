@@ -63,7 +63,8 @@ services:
       LLM_TOKEN_BUDGET_PER_GUARDIAN_PER_DAY: ${LLM_TOKEN_BUDGET_PER_GUARDIAN_PER_DAY:-200000}
       # Signed PDF receipts (online orders). No certificate in the file = no PDF counts.
       PDF_TRUSTED_ROOTS_PATH: /config/pdf-trusted-roots.pem
-      PDF_ALLOWED_SIGNERS: ${PDF_ALLOWED_SIGNERS:-Lazada}
+      # Exact organisation name on the shop's signing certificate (Lazada Thailand's).
+      PDF_ALLOWED_SIGNERS: ${PDF_ALLOWED_SIGNERS:-LAZADA EXPRESS COMPANY LIMITED}
     volumes:
       - ./config/pdf-trusted-roots.pem:/config/pdf-trusted-roots.pem:ro
     ports:
@@ -97,6 +98,7 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
       AGENT_OPENROUTER_VISION: ${AGENT_OPENROUTER_VISION:-0}
+      AGENT_OPENROUTER_DOCUMENTS: ${AGENT_OPENROUTER_DOCUMENTS:-0}
       AGENT_MAKER_MODEL: ${AGENT_MAKER_MODEL:-}
       AGENT_AUDITOR_MODEL: ${AGENT_AUDITOR_MODEL:-}
       AGENT_MAKER_EFFORT: ${AGENT_MAKER_EFFORT:-high}
