@@ -4,6 +4,7 @@
 #   ./sigil init              create .env with generated secrets and the agent wallet
 #   ./sigil devnet [args]     set up the aUSD mint and demo accounts on devnet
 #   ./sigil up                build and start everything
+#   ./sigil reset-db [--yes]  back up the database, then start over with an empty one
 #   ./sigil crypto <script>   run a crypto/scripts script, e.g. `crypto delegation show`
 #   ./sigil <anything else>   passed to docker compose (down, logs -f gateway, ps, ...)
 set -euo pipefail
@@ -130,11 +131,44 @@ cmd_up() {
   echo "Gateway: http://127.0.0.1:8000  (logs: ./sigil logs -f)"
 }
 
+# Deletes the database (users, families, policies, requests, the audit log) and starts the
+# stack again on an empty one, after a backup in backups/. Devnet, .env and the signer's
+# ledger are kept: the ledger is what stops a payment being signed twice.
+cmd_reset_db() {
+  [ -f .env ] || die "no .env: run ./sigil init first"
+  if [ "${1:-}" != "--yes" ]; then
+    printf "This deletes every user, family, policy, request and audit entry. Type 'reset' to go on: "
+    read -r answer
+    [ "$answer" = reset ] || die "cancelled, nothing changed"
+  fi
+  project=$(sed -n 's/^name: *//p' docker-compose.yml)
+  [ -n "$project" ] || die "docker-compose.yml has no project name"
+
+  if docker compose ps --status running --services | grep -qx postgres; then
+    mkdir -p backups
+    file="backups/sigil-$(date +%Y%m%d-%H%M%S).sql.gz"
+    # With pipefail, a failed dump stops here, before anything is deleted.
+    docker compose exec -T postgres pg_dump -U sigil_owner sigil | gzip > "$file"
+    chmod 600 "$file"
+    info "backup: $file"
+  else
+    info "postgres isn't running, so there is nothing to back up"
+  fi
+
+  docker compose down
+  if docker volume inspect "${project}_pgdata" > /dev/null 2>&1; then
+    docker volume rm "${project}_pgdata" > /dev/null
+    info "deleted the database volume ${project}_pgdata"
+  fi
+  cmd_up
+}
+
 case "${1:-help}" in
   init) cmd_init ;;
   devnet) shift; cmd_devnet "$@" ;;
   crypto) shift; cmd_crypto "$@" ;;
   up) cmd_up ;;
-  help | -h | --help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' ;;
+  reset-db) shift; cmd_reset_db "$@" ;;
+  help | -h | --help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) docker compose "$@" ;;
 esac

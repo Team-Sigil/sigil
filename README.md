@@ -69,6 +69,7 @@ startup).
 | `./sigil init` | create `.env`, fill missing secrets and the agent wallet (never rotates existing ones) |
 | `./sigil devnet [args]` | `crypto/scripts/setup_devnet.py` (args pass through, e.g. `--guardian <Phantom wallet>`), then writes `AUSD_MINT` |
 | `./sigil up` | checks the agents' model keys, then `docker compose up -d --build --wait` |
+| `./sigil reset-db [--yes]` | for a clean demo: backs the database up to `backups/`, deletes it, and starts the stack on an empty one (asks you to type `reset` unless `--yes`). Keeps `.env`, devnet and the signer's ledger; on-chain balances and delegations are as they were |
 | `./sigil crypto <script> [args]` | any script in `crypto/scripts`, e.g. `crypto delegation revoke` |
 | `./sigil <other>` | passed to `docker compose`: `down`, `ps`, `logs -f gateway`, `down -v` (wipes data) |
 
