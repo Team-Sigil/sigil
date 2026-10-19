@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Run the whole Sigil stack from this repo. See README.md.
+#
+#   ./sigil init              clone the layers, create .env with generated secrets
+#   ./sigil devnet [args]     set up the aUSD mint and demo accounts on devnet
+#   ./sigil up                build and start everything
+#   ./sigil sync              update repos/ to the refs in repos.conf
+#   ./sigil link <dir>        use existing checkouts in <dir> instead of cloning
+#   ./sigil crypto <script>   run a sigil-crypto script, e.g. `crypto delegation show`
+#   ./sigil <anything else>   passed to docker compose (down, logs -f gateway, ps, ...)
+set -euo pipefail
+
+cd "$(dirname "$0")"
+ROOT=$(pwd)
+
+die() { echo "sigil: $*" >&2; exit 1; }
+info() { echo "==> $*"; }
+
+repos() { grep -v -e '^#' -e '^[[:space:]]*$' repos.conf; }
+
+# Sets KEY=value in .env, keeping every other line.
+set_env() {
+  V="$2" awk -v k="$1" 'BEGIN { v = ENVIRON["V"] }
+    $0 ~ "^" k "=" { print k "=" v; done = 1; next } { print }
+    END { if (!done) print k "=" v }' .env > .env.tmp
+  mv .env.tmp .env
+}
+
+# The value of KEY in .env, or empty.
+get_env() { sed -n "s/^$1=//p" .env | tail -n 1; }
+
+# Fills KEY only when it is empty, so re-running init never rotates a secret.
+fill_env() {
+  if [ -z "$(get_env "$1")" ]; then set_env "$1" "$2"; echo "    $1"; fi
+}
+
+token() { openssl rand -hex 24; }
+fernet_key() { openssl rand -base64 32 | tr '+/' '-_'; }
+
+cmd_sync() {
+  mkdir -p repos
+  repos | while read -r name url ref; do
+    dir="repos/$name"
+    if [ -L "$dir" ]; then
+      info "$name: linked to $(readlink "$dir"), left as is"
+    elif [ ! -d "$dir" ]; then
+      info "$name: cloning $ref"
+      git clone --quiet "$url" "$dir"
+      git -C "$dir" checkout --quiet "$ref"
+    elif [ -n "$(git -C "$dir" status --porcelain)" ]; then
+      info "$name: local changes, not updated"
+    else
+      info "$name: updating to $ref"
+      git -C "$dir" fetch --quiet --tags origin
+      git -C "$dir" checkout --quiet "$ref"
+      if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$ref"; then
+        git -C "$dir" merge --quiet --ff-only "origin/$ref"
+      fi
+    fi
+  done
+}
+
+cmd_link() {
+  [ $# -eq 1 ] || die "usage: ./sigil link <dir containing the three repos>"
+  src=$(cd "$1" && pwd)
+  mkdir -p repos
+  repos | while read -r name _ _; do
+    [ -d "$src/$name" ] || die "$src/$name not found"
+    [ -e "repos/$name" ] && [ ! -L "repos/$name" ] && die "repos/$name exists and is not a link"
+    ln -sfn "$src/$name" "repos/$name"
+    info "$name -> $src/$name"
+  done
+}
+
+build_signer() {
+  info "building the signer image"
+  docker build --quiet -t sigil-signer:local repos/sigil-crypto > /dev/null
+}
+
+# Runs `python -m scripts.<name>` from sigil-crypto in the signer image. The scripts aren't
+# in the image, so they are mounted; demo keypairs persist in ./devnet.
+cmd_crypto() {
+  [ $# -ge 1 ] || die "usage: ./sigil crypto <script> [args]"
+  [ -f .env ] || die "no .env: run ./sigil init first"
+  mkdir -p devnet
+  rpc=$(get_env SOLANA_RPC_URL)
+  tty=-i; [ -t 0 ] && tty=-it
+  docker run --rm "$tty" \
+    --user "$(id -u):$(id -g)" \
+    -v "$ROOT/repos/sigil-crypto/scripts:/app/scripts:ro" \
+    -v "$ROOT/devnet:/app/.devnet" \
+    -e AGENT_WALLET_PUBKEY="$(get_env AGENT_WALLET_PUBKEY)" \
+    -e SOLANA_RPC_URL="${rpc:-https://api.devnet.solana.com}" \
+    sigil-signer:local python -m "scripts.$1" "${@:2}"
+}
+
+cmd_init() {
+  command -v docker > /dev/null || die "docker is required"
+  command -v openssl > /dev/null || die "openssl is required"
+  cmd_sync
+
+  [ -f .env ] || { cp .env.example .env; info "created .env"; }
+  info "generating missing secrets"
+  fill_env SIGIL_OWNER_PASSWORD "$(token)"
+  fill_env SIGIL_APP_PASSWORD "$(token)"
+  fill_env SIGIL_SIGNER_RO_PASSWORD "$(token)"
+  fill_env JWT_SECRET "$(openssl rand -hex 32)"
+  fill_env DATA_ENCRYPTION_KEY "$(fernet_key)"
+  fill_env AGENT_INBOUND_TOKEN "$(token)"
+  fill_env PLATFORM_MAKER_TOKEN "$(token)"
+  fill_env PLATFORM_AUDITOR_TOKEN "$(token)"
+  fill_env CRYPTO_HMAC_SECRET "$(token)"
+
+  if [ -z "$(get_env AGENT_WALLET_KEY_ENC)" ]; then
+    build_signer
+    info "creating the agent wallet"
+    wallet=$(docker run --rm -v "$ROOT/repos/sigil-crypto/scripts:/app/scripts:ro" \
+      sigil-signer:local python -m scripts.new_agent_wallet)
+    for key in AGENT_WALLET_PUBKEY AGENT_WALLET_KEY_ENC SIGNER_MASTER_KEY; do
+      set_env "$key" "$(echo "$wallet" | sed -n "s/^$key=//p")"
+      echo "    $key"
+    done
+    echo "    fund it for fees: https://faucet.solana.com ($(get_env AGENT_WALLET_PUBKEY))"
+  fi
+
+  echo
+  [ -n "$(get_env ANTHROPIC_API_KEY)" ] || echo "Next: set ANTHROPIC_API_KEY in .env"
+  [ -n "$(get_env AUSD_MINT)" ] || echo "Next: ./sigil devnet   (or MOCK_CHAIN=true and any AUSD_MINT)"
+  echo "Then: ./sigil up"
+}
+
+cmd_devnet() {
+  [ -n "$(get_env AGENT_WALLET_PUBKEY)" ] || die "no agent wallet: run ./sigil init first"
+  build_signer
+  cmd_crypto setup_devnet "$@"
+  mint=$(sed -n 's/.*"ausd_mint": *"\([^"]*\)".*/\1/p' devnet/seed.json)
+  [ -n "$mint" ] || die "devnet/seed.json has no ausd_mint"
+  set_env AUSD_MINT "$mint"
+  info "AUSD_MINT=$mint written to .env"
+}
+
+cmd_up() {
+  [ -f .env ] || die "no .env: run ./sigil init first"
+  for name in $(repos | awk '{ print $1 }'); do
+    [ -d "repos/$name" ] || die "repos/$name missing: run ./sigil sync"
+  done
+  docker compose up -d --build --wait
+  docker compose ps
+  echo
+  echo "Gateway: http://127.0.0.1:8000  (logs: ./sigil logs -f)"
+}
+
+case "${1:-help}" in
+  init) cmd_init ;;
+  sync) cmd_sync ;;
+  link) shift; cmd_link "$@" ;;
+  devnet) shift; cmd_devnet "$@" ;;
+  crypto) shift; cmd_crypto "$@" ;;
+  up) cmd_up ;;
+  help | -h | --help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) docker compose "$@" ;;
+esac

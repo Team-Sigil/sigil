@@ -1,0 +1,133 @@
+# The whole Sigil stack: Postgres, gateway (+ migrations), agent layer and signer.
+# Sources come from ./repos (see ./sigil sync), values from .env (see .env.example).
+# Start with: ./sigil up
+#
+# Each service gets only the variables it needs: the agent never sees a DB password, the
+# signer never sees the gateway's session or data keys.
+
+name: sigil-stack
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: sigil
+      POSTGRES_USER: sigil_owner
+      POSTGRES_PASSWORD: ${SIGIL_OWNER_PASSWORD:?run ./sigil init}
+      SIGIL_APP_PASSWORD: ${SIGIL_APP_PASSWORD:?run ./sigil init}
+      SIGIL_SIGNER_RO_PASSWORD: ${SIGIL_SIGNER_RO_PASSWORD:?run ./sigil init}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./repos/sigil-gateway/infra/postgres/init-roles.sh:/docker-entrypoint-initdb.d/01-init-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sigil_owner -d sigil"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: applies the gateway's migrations as the owner role, then exits.
+  migrate:
+    build: ./repos/sigil-gateway
+    image: sigil-gateway:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL_MIGRATIONS: postgresql+psycopg://sigil_owner:${SIGIL_OWNER_PASSWORD}@postgres:5432/sigil
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    build: ./repos/sigil-gateway
+    image: sigil-gateway:local
+    environment:
+      DATABASE_URL: postgresql+psycopg://sigil_app:${SIGIL_APP_PASSWORD}@postgres:5432/sigil
+      JWT_SECRET: ${JWT_SECRET:?run ./sigil init}
+      JWT_TTL_HOURS: ${JWT_TTL_HOURS:-12}
+      SIWS_DOMAIN: ${SIWS_DOMAIN:?set SIWS_DOMAIN in .env}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?run ./sigil init}
+      AGENT_URL: http://agent:8100
+      AGENT_INBOUND_TOKEN: ${AGENT_INBOUND_TOKEN:?run ./sigil init}
+      PLATFORM_MAKER_TOKEN: ${PLATFORM_MAKER_TOKEN:?run ./sigil init}
+      PLATFORM_AUDITOR_TOKEN: ${PLATFORM_AUDITOR_TOKEN:?run ./sigil init}
+      CRYPTO_URL: http://signer:8300
+      CRYPTO_HMAC_SECRET: ${CRYPTO_HMAC_SECRET:?run ./sigil init}
+      AUSD_MINT: ${AUSD_MINT:?run ./sigil devnet (or set any pubkey with MOCK_CHAIN=true)}
+      AGENT_WALLET_PUBKEY: ${AGENT_WALLET_PUBKEY:?run ./sigil init}
+      APPLE_APP_ID: ${APPLE_APP_ID:-}
+      APPLE_APP_ATTEST_PRODUCTION: ${APPLE_APP_ATTEST_PRODUCTION:-true}
+      CAMERA_ONLY_PROOFS: ${CAMERA_ONLY_PROOFS:-false}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-30}
+      DEPENDENT_MESSAGES_PER_DAY: ${DEPENDENT_MESSAGES_PER_DAY:-50}
+      LLM_TOKEN_BUDGET_PER_GUARDIAN_PER_DAY: ${LLM_TOKEN_BUDGET_PER_GUARDIAN_PER_DAY:-200000}
+    ports:
+      # GATEWAY_BIND=0.0.0.0 lets a phone on the same network reach it.
+      - "${GATEWAY_BIND:-127.0.0.1}:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      signer:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  agent:
+    build: ./repos/agent-layer
+    image: sigil-agent:local
+    environment:
+      PLATFORM_API_URL: http://gateway:8000
+      PLATFORM_MAKER_TOKEN: ${PLATFORM_MAKER_TOKEN}
+      PLATFORM_AUDITOR_TOKEN: ${PLATFORM_AUDITOR_TOKEN}
+      AGENT_INBOUND_TOKEN: ${AGENT_INBOUND_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in .env}
+      AGENT_SCHEDULER: ${AGENT_SCHEDULER:-1}
+      AGENT_CAMERA_ONLY_PROOFS: ${CAMERA_ONLY_PROOFS:-false}
+      AGENT_MAKER_MODEL: ${AGENT_MAKER_MODEL:-claude-opus-5-5}
+      AGENT_AUDITOR_MODEL: ${AGENT_AUDITOR_MODEL:-claude-opus-5-5}
+    # The agent's sandbox resolves the gateway's address once at startup, so the gateway
+    # must already be up.
+    depends_on:
+      gateway:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Not published: the gateway is its only client (crypto handoff §6).
+  signer:
+    build: ./repos/sigil-crypto
+    image: sigil-signer:local
+    environment:
+      SIGNER_HMAC_SECRET: ${CRYPTO_HMAC_SECRET}
+      AUSD_MINT: ${AUSD_MINT}
+      AGENT_WALLET_PUBKEY: ${AGENT_WALLET_PUBKEY}
+      AGENT_WALLET_KEY_ENC: ${AGENT_WALLET_KEY_ENC:?run ./sigil init}
+      SIGNER_MASTER_KEY: ${SIGNER_MASTER_KEY:?run ./sigil init}
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-https://api.devnet.solana.com}
+      DATABASE_URL_READONLY: postgresql://sigil_signer_ro:${SIGIL_SIGNER_RO_PASSWORD}@postgres:5432/sigil
+      SIGNER_MAX_PER_TRANSFER_UNITS: ${SIGNER_MAX_PER_TRANSFER_UNITS:-200000000}
+      SIGNER_MAX_PER_DAY_UNITS: ${SIGNER_MAX_PER_DAY_UNITS:-300000000}
+      MOCK_CHAIN: ${MOCK_CHAIN:-false}
+    volumes:
+      - signer-data:/data  # the idempotency ledger must survive restarts (SEC-07)
+    # registered_destinations is created by the migrations.
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8300/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+  signer-data:
