@@ -17,7 +17,14 @@ from gateway.contracts.policy import PolicyBody
 from gateway.core.config import Settings
 from gateway.core.errors import NotFoundError
 from gateway.db import audit_log
-from gateway.db.models import BudgetCounter, Notification, Policy, Transfer, User
+from gateway.db.models import (
+    BudgetCounter,
+    Notification,
+    Policy,
+    ProofObligation,
+    Transfer,
+    User,
+)
 from gateway.db.session import SessionDep
 from gateway.engine.transfers import (
     parse_uuid,
@@ -25,7 +32,7 @@ from gateway.engine.transfers import (
     usable_delegation,
     week_start,
 )
-from gateway.enums import PolicyStatus, TransferStatus
+from gateway.enums import ObligationStatus, PolicyStatus, TransferStatus
 from gateway.events import EventBus
 from gateway.views import load_history
 
@@ -60,6 +67,17 @@ class TransferView(BaseModel):
 class History(BaseModel):
     items: list[HistoryItem]
     transfers: list[TransferView]
+
+
+class ProofObligationView(BaseModel):
+    """A receipt owed for money already sent. While one is open the dependent cannot ask
+    for more (SPEC §8.9)."""
+
+    id: str
+    request_id: str
+    transfer_id: str
+    amount: int
+    created_at: datetime
 
 
 class NotificationView(BaseModel):
@@ -122,6 +140,30 @@ async def get_budget(member: MemberDep, request: Request, session: SessionDep) -
         remaining=max(0, cap - spent - reserved),
         delegated_remaining=delegated,
     )
+
+
+@router.get("/proof-obligations")
+async def get_proof_obligations(
+    member: MemberDep, session: SessionDep
+) -> list[ProofObligationView]:
+    rows = await session.scalars(
+        select(ProofObligation)
+        .where(
+            ProofObligation.family_id == member.family.id,
+            ProofObligation.status == ObligationStatus.OPEN,
+        )
+        .order_by(ProofObligation.created_at)
+    )
+    return [
+        ProofObligationView(
+            id=str(row.id),
+            request_id=str(row.request_id),
+            transfer_id=str(row.transfer_id),
+            amount=row.amount,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
 
 
 @router.get("/history")

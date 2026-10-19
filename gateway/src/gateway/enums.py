@@ -67,6 +67,13 @@ class TransferStatus(StrEnum):
     FAILED = "failed"
 
 
+class ObligationStatus(StrEnum):
+    """A receipt owed for money already sent."""
+
+    OPEN = "open"
+    SETTLED = "settled"
+
+
 class Verdict(StrEnum):
     AGREE = "agree"
     FLAG = "flag"
@@ -102,6 +109,8 @@ class AuditEvent(StrEnum):
     FREEZE_CHANGED = "freeze_changed"
     REQUEST_CREATED = "request_created"
     PROOF_UPLOADED = "proof_uploaded"
+    PROOF_OWED = "proof_owed"
+    PROOF_SETTLED = "proof_settled"
     VERDICT_RECORDED = "verdict_recorded"
     TRANSFER_BLOCKED = "transfer_blocked"
     TRANSFER_PENDING = "transfer_pending"

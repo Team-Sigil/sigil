@@ -8,10 +8,10 @@ dependent by the dependent's user id.
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,11 +35,14 @@ from gateway.db.models import (
     Policy,
     PolicyProposal,
     Proof,
+    ProofObligation,
     ProofRequest,
     Request,
     Transfer,
+    UsedProofKey,
     User,
 )
+from gateway.engine.proofs import counts_as_proof, proof_keys
 from gateway.engine.transfers import (
     parse_uuid,
     pending_amount,
@@ -52,6 +55,7 @@ from gateway.enums import (
     Audience,
     AuditEvent,
     GuardianDecision,
+    ObligationStatus,
     PolicyStatus,
     QuestionStatus,
     Role,
@@ -64,6 +68,18 @@ from gateway.events import EventBus, EventType
 from gateway.views import as_category, load_history, to_agent_proof
 
 logger = logging.getLogger(__name__)
+
+
+class SettleObligation(BaseModel):
+    """What the agent read from the proof it says settles an owed receipt."""
+
+    proof_id: str
+    findings: agent.ProofFindingsRecord
+
+
+class SettledObligation(BaseModel):
+    settled: bool
+    reason: str | None = None
 
 THREAD_LIMIT = 100
 DEFAULT_DEPENDENT_NAME = "your dependent"
@@ -583,3 +599,65 @@ async def validate_policy_draft(
     except ValueError as exc:
         return agent.PolicyDraftValidation(valid=False, errors=[str(exc)])
     return agent.PolicyDraftValidation(valid=True, errors=[])
+
+
+async def settle_obligation(
+    session: AsyncSession, obligation_id: str, body: "SettleObligation"
+) -> "SettledObligation":
+    """Settle a receipt owed for money already sent (SPEC §8.9).
+
+    The proof must belong to the obligation's request, count as proof, not have backed a
+    transfer before, and its findings must cover the amount. A PDF from an online order is
+    accepted on its findings alone for now: whether the document is genuine is not checked
+    yet, and the obligation records that.
+    """
+    obligation = await session.scalar(
+        select(ProofObligation).where(ProofObligation.id == parse_uuid(obligation_id))
+    )
+    if obligation is None:
+        raise NotFoundError("No such proof obligation.")
+    if obligation.status is ObligationStatus.SETTLED:
+        return SettledObligation(settled=True, reason=None)
+
+    proof_row = await session.scalar(
+        select(Proof).where(
+            Proof.id == parse_uuid(body.proof_id), Proof.request_id == obligation.request_id
+        )
+    )
+    if proof_row is None:
+        return SettledObligation(settled=False, reason="proof not for this request")
+
+    findings = body.findings
+    if not findings.matches_claim or findings.total < obligation.amount:
+        return SettledObligation(settled=False, reason="proof does not cover the amount")
+
+    family = await session.get(Family, obligation.family_id)
+    assert family is not None
+    used = await session.scalars(
+        select(UsedProofKey.key).where(UsedProofKey.guardian_user_id == family.guardian_user_id)
+    )
+    proof = to_agent_proof(proof_row, str(family.dependent_user_id), with_content=False)
+    is_document = proof_row.media_type == "application/pdf"
+    if not is_document and not counts_as_proof(proof):
+        return SettledObligation(settled=False, reason="not usable as proof")
+    if set(proof_keys(proof, findings)) & set(used):
+        return SettledObligation(settled=False, reason="proof already used")
+
+    obligation.status = ObligationStatus.SETTLED
+    obligation.proof_id = proof_row.id
+    obligation.findings = findings.model_dump()
+    obligation.settled_at = datetime.now(UTC)
+    for key in proof_keys(proof, findings):
+        session.add(
+            UsedProofKey(
+                guardian_user_id=family.guardian_user_id, family_id=family.id, key=key
+            )
+        )
+    await audit_log.append(
+        session,
+        family.id,
+        AuditEvent.PROOF_SETTLED,
+        {"obligation_id": str(obligation.id), "proof_id": str(proof_row.id)},
+    )
+    await session.commit()
+    return SettledObligation(settled=True, reason=None)

@@ -42,6 +42,7 @@ from gateway.enums import (
     InterviewStatus,
     InterviewTurnKind,
     NoncePurpose,
+    ObligationStatus,
     PolicyStatus,
     ProposalStatus,
     QuestionStatus,
@@ -426,6 +427,9 @@ class Transfer(Base):
     proof_ids: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
     proof_findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     status: Mapped[TransferStatus] = mapped_column(str_enum(TransferStatus, "transfer_status"))
+    # Set when the transfer cleared at or above the proof threshold without proof: once it is
+    # sent, the dependent owes a receipt (SPEC §8.9).
+    proof_owed: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     reason: Mapped[str | None] = mapped_column(String(300))
     destination_token_account: Mapped[str | None] = mapped_column(String(PUBKEY_LEN))
     tx_signature: Mapped[str | None] = mapped_column(String(128))
@@ -438,6 +442,33 @@ class Transfer(Base):
         CheckConstraint("amount > 0", name="amount_positive"),
         Index("ix_transfers_family_created", "family_id", "created_at"),
     )
+
+
+class ProofObligation(Base):
+    """A receipt the dependent owes for money already sent.
+
+    Opened when a transfer at or above `proof_threshold` is sent without proof, and closed
+    when a proof arrives that counts, covers the amount and has not backed a transfer before.
+    While one is open the dependent cannot ask for more money (SPEC §8.9).
+    """
+
+    __tablename__ = "proof_obligations"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    family_id: Mapped[uuid.UUID] = family_fk()
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("requests.id"), index=True)
+    transfer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("transfers.id"), unique=True)
+    amount: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[ObligationStatus] = mapped_column(
+        str_enum(ObligationStatus, "obligation_status")
+    )
+    # The proof that settled it, and what the agent read from that proof.
+    proof_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("proofs.id"))
+    findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = created_at()
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("ix_proof_obligations_family_status", "family_id", "status"),)
 
 
 class BudgetCounter(Base):

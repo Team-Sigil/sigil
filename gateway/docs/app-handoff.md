@@ -92,6 +92,21 @@ total.
   updates for every dependent, open one stream per family. A guardian-wide notification is
   sent on every stream, so de-duplicate by `notification_id`.
 
+## Proof after payment
+
+A request at or above `proof_threshold` is **sent first**, and the dependent then owes a
+receipt. Until it arrives, `POST /requests` returns `409 PROOF_OUTSTANDING`.
+
+- `GET /proof-obligations` lists what is owed (`amount`, `request_id`, `transfer_id`).
+- Upload against the obligation's `request_id` as usual, `POST /requests/{id}/proofs`.
+- Two ways to show it: the **in-app camera** with an App Attest capture claim, as before,
+  or, for an online order that cannot be photographed, the **PDF receipt** from the order
+  confirmation. Still no gallery picker and no screenshots.
+- A PDF is accepted and stored, flagged `unchecked_document`: whether the document is a
+  genuine order confirmation is not checked yet.
+- The block lifts only once the agent has read the proof and the gateway has accepted it,
+  so show the owed receipt as a task the dependent has to clear, not as a passing message.
+
 ## Checklist
 
 - [ ] Read `family_ids` after sign-in; add a dependent picker for 2+ dependents.
@@ -102,4 +117,7 @@ total.
 - [ ] Merge questions and notifications across families; group by `family_id` (`null` =
       everyone).
 - [ ] One SSE stream per family; de-duplicate notification events.
-- [ ] Dependent app: no changes.
+- [ ] Dependent app (multi-dependent): no changes.
+- [ ] Show what is owed from `GET /proof-obligations`, and handle `409 PROOF_OUTSTANDING`
+      on a new request.
+- [ ] Offer the PDF of an online order's receipt as well as the in-app camera.

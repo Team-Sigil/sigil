@@ -6,7 +6,7 @@
 > invent: use the decision in §15, or add an entry there and ask a human.
 
 - Project: FinTechathon 2026 entry (theme: AI as a Financial Participant)
-- Version: 2.0 (see §19)
+- Version: 2.1 (see §19)
 - Security weighs 30% of judging. Requirements tagged `SEC-xx` (§13) are non-negotiable.
 
 ---
@@ -314,10 +314,16 @@ engine". These invariants hold:
 7. **Allowance.** Capped by the signed `allowance.amount` (not `max_per_request`), one per ISO
    week (by key). Raising it needs the guardian.
 8. **Requested amount.** Never more than `amount_requested − already_sent − pending`.
-9. **Proofs.** At or above `proof_threshold`, an unused image (or text extracted from one)
-   whose findings match and cover the amount is required. A receipt backs one transfer:
-   across the guardian's dependents (id, file hash, fingerprint) and across all families
-   (keyed fingerprint).
+9. **Proofs come after payment.** A dependent cannot buy anything before being paid, so a
+   request at or above `proof_threshold` is sent first and leaves a receipt owed. While an
+   owed receipt is outstanding the dependent gets no more money (`409 PROOF_OUTSTANDING`,
+   engine `proof outstanding`); a guardian override does not lift it, and the scheduled
+   allowance is unaffected. An owed receipt is settled only by a proof that counts, belongs
+   to the request and whose findings cover the amount — the gateway decides, never the
+   agent's say-so. A receipt backs one transfer: across the guardian's dependents (id, file
+   hash, fingerprint) and across all families (keyed fingerprint). Receipts for online
+   orders arrive as PDFs, which are accepted and stored but **not yet checked for being
+   genuine**.
 10. **Transaction.** Reserve, record and spend verdicts and proofs in one commit under the
     locks; call the crypto layer outside any lock; settle on a definite answer; keep
     `pending` and retry on an unknown one (SEC-07, SEC-08).
@@ -381,7 +387,9 @@ Implemented by the iOS app; guides: [docs/app-handoff.md](docs/app-handoff.md),
   activation, answer questions, freeze, and sign the SPL `approve` (delegate =
   `AGENT_WALLET_PUBKEY`) in Phantom. Send `X-Family-Id` when there are several dependents.
 - Dependent: requests and follow-ups; proofs from the in-app camera with App Attest-signed
-  capture claims (no gallery picker).
+  capture claims (no gallery picker), or the PDF receipt of an online order. After a
+  payment at or above `proof_threshold`, show what is owed and that no further request is
+  possible until it is sent.
 - Live updates by SSE with the token in the `Authorization` header, never the URL;
   agent-backed calls need a timeout of at least 3 minutes.
 
@@ -477,7 +485,8 @@ gateway; the engine re-verifies approvals on every transfer.
 | Allowance cap | The signed allowance amount; raising it needs the guardian |
 | Guardian override scope | Exactly the signed amount, past the amount cap, weekly cap and review only |
 | Sign-in method | Phantom `signMessage` over the gateway's text (not Phantom `signIn`) |
-| Receipts | In-app camera with App Attest; with `CAMERA_ONLY_PROOFS`, only verified captures count |
+| Receipts | In-app camera with App Attest, or a PDF for an online order; with `CAMERA_ONLY_PROOFS`, only verified captures count among images |
+| When proof is needed | After payment: money goes out first, the receipt is owed, and no further request is served until it arrives |
 | Custodial fallback | Not implemented |
 
 To change a decision: a `[SPEC]` commit updating this table.
@@ -537,3 +546,4 @@ or address fields; the commit or PR says which sections it implements.
 | 2026-10-19 | 1.0.3 | A guardian may have several dependents; multiple guardians stay out of scope |
 | 2026-10-19 | 1.0.4 | The signer also checks the source token account; `registered_destinations` exposes it |
 | 2026-10-19 | 2.0 | Rewritten for the four-service split. This repo's docs are the project's single source of truth (§0). The policy schema, categories, outcomes, interfaces, engine, data model and agent behaviour now match what is built; signer idempotency comes before its caps; sign-in uses `signMessage`; the SEC table has owners and status |
+| 2026-10-19 | 2.1 | Proof comes after payment: a request at or above `proof_threshold` is sent first and owes a receipt, which blocks further requests until settled; PDF receipts accepted for online orders (not yet checked) |

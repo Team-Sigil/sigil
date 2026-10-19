@@ -27,7 +27,7 @@ from gateway.db import audit_log
 from gateway.db.models import Decision, Family, Message, Proof
 from gateway.db.models import Request as RequestRow
 from gateway.db.session import SessionDep
-from gateway.engine.transfers import parse_uuid
+from gateway.engine.transfers import has_open_obligation, parse_uuid
 from gateway.enums import AuditEvent, Role, ThreadRole
 from gateway.proof_images import NEAR_DUPLICATE_BITS, ImageRejectedError, hamming, normalise
 
@@ -36,6 +36,7 @@ router = APIRouter(prefix="/api/v1/requests", tags=["requests"])
 MAX_MESSAGE_CHARS = 2_000
 MAX_PROOF_BYTES = 15 * 1024 * 1024  # raw upload; the stored copy is normalised to <= 3.75 MB
 MAX_PROOFS_PER_REQUEST = 3  # the agent reads the first 3; more would be silently ignored
+PDF_MAGIC = b"%PDF-"  # an online order's receipt; typed from the bytes, never Content-Type
 LIST_LIMIT = 50
 
 
@@ -49,6 +50,13 @@ class UnsupportedProofError(DomainError):
     code = "UNSUPPORTED_PROOF"
     status = 422
     message = "Proofs must be a JPEG, PNG or WebP image (at least 200 px), or plain text."
+
+
+class ProofOutstandingError(DomainError):
+    """Money already sent is waiting on its receipt (SPEC §8.9)."""
+
+    code = "PROOF_OUTSTANDING"
+    status = 409
 
 
 class DailyLimitError(DomainError):
@@ -202,6 +210,11 @@ async def run_agent(request: Request, request_id: str) -> DecisionView:
 async def create_request(
     body: NewRequest, dependent: FamilyDependentDep, request: Request, session: SessionDep
 ) -> ProcessedRequest:
+    # Money already sent is waiting on its receipt: no more until it arrives (SPEC §8.9).
+    if await has_open_obligation(session, dependent.family.id):
+        raise ProofOutstandingError(
+            "Send the receipt for the money you already received before asking for more."
+        )
     await enforce_daily_limit(session, dependent, _daily_limit(request))
     row = RequestRow(
         family_id=dependent.family.id,
@@ -280,7 +293,31 @@ async def upload_proof(
         Family.guardian_user_id == dependent.family.guardian_user_id
     )
 
-    if (file.content_type or "").startswith("text/plain"):
+    if data.startswith(PDF_MAGIC):
+        # An online order's receipt, which cannot be photographed. Typed from the bytes,
+        # never the Content-Type. Stored as uploaded: whether the PDF is a genuine order
+        # confirmation is not checked yet, so it carries `unchecked_document` and counts
+        # as proof only once something reads it (SPEC §8.9).
+        digest = hashlib.sha256(data).hexdigest()
+        seen = await session.scalar(
+            select(Proof.id).where(Proof.family_id.in_(sibling_families), Proof.sha256 == digest)
+        )
+        proof = Proof(
+            request_id=row.id,
+            family_id=family_id,
+            kind=kind,
+            media_type="application/pdf",
+            size_bytes=len(data),
+            content=data,
+            sha256=digest,
+            original=data,
+            original_sha256=digest,
+            # `source` stays "file": its values are fixed by the shared agent contract,
+            # so a PDF is told apart by its media type and the flag below.
+            source="file",
+            flags=(["duplicate"] if seen else []) + ["unchecked_document"],
+        )
+    elif (file.content_type or "").startswith("text/plain"):
         # Typed text is the dependent's claim, never evidence.
         try:
             data.decode("utf-8")

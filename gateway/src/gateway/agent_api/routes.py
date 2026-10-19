@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from gateway.agent_api import service
 from gateway.agent_api.auth import AgentDep, AuditorDep, MakerDep
+from gateway.agent_api.service import SettledObligation, SettleObligation
 from gateway.contracts import agent
 from gateway.contracts.crypto import CryptoClient
 from gateway.core.config import Settings
@@ -135,6 +136,18 @@ async def request_proof(
     body: agent.ProofRequest, _: MakerDep, session: SessionDep
 ) -> agent.Receipt:
     return await service.request_proof(session, body)
+
+
+@router.post("/proof-obligations/{obligation_id}/settle")
+async def settle_proof_obligation(
+    obligation_id: str, body: SettleObligation, _: MakerDep, session: SessionDep
+) -> SettledObligation:
+    """Close a receipt the dependent owed.
+
+    The agent says which proof it read and what it found; the gateway decides whether that
+    settles the obligation, so a model can never clear a debt by asserting that it is paid.
+    """
+    return await service.settle_obligation(session, obligation_id, body)
 
 
 @router.post("/policy-proposals")

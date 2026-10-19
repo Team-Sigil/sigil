@@ -46,17 +46,25 @@ from gateway.db.models import (
     GuardianQuestion,
     Policy,
     Proof,
+    ProofObligation,
     ReceiptFingerprint,
     Request,
     Transfer,
     UsedProofKey,
     User,
 )
-from gateway.engine.checks import RequestFacts, TransferFacts, VerdictFacts, check_transfer
+from gateway.engine.checks import (
+    RequestFacts,
+    TransferFacts,
+    VerdictFacts,
+    check_transfer,
+    owes_proof_after,
+)
 from gateway.engine.proofs import keyed_fingerprint, proof_keys
 from gateway.enums import (
     AuditEvent,
     GuardianDecision,
+    ObligationStatus,
     PolicyStatus,
     QuestionStatus,
     TransferStatus,
@@ -114,6 +122,17 @@ async def verified_approvals(
         if verify_ed25519(guardian_wallet, message, q.signature):
             amounts.append(q.approved_amount)
     return amounts
+
+
+async def has_open_obligation(session: AsyncSession, family_id: uuid.UUID) -> bool:
+    """True while a receipt is owed for money already sent to this dependent."""
+    found = await session.scalar(
+        select(ProofObligation.id).where(
+            ProofObligation.family_id == family_id,
+            ProofObligation.status == ObligationStatus.OPEN,
+        )
+    )
+    return found is not None
 
 
 async def pending_amount(session: AsyncSession, request_id: uuid.UUID) -> int:
@@ -246,6 +265,11 @@ class TransferEngine:
                 proof_ids=list(t.proof_ids),
                 proof_findings=t.proof_findings.model_dump() if t.proof_findings else None,
                 status=TransferStatus.BLOCKED if reason else TransferStatus.PENDING,
+                proof_owed=(
+                    False
+                    if reason or facts.policy is None
+                    else owes_proof_after(facts, facts.policy)
+                ),
                 reason=reason,
                 destination_token_account=None if reason else family.dependent_token_account,
                 # The engine's clock, not the database's: settling finds the reserved budget
@@ -468,6 +492,7 @@ class TransferEngine:
             proof_origins=origins,
             receipt_already_used=receipt_used,
             guardian_override=override,
+            owes_proof=await has_open_obligation(session, family.id),
         )
         return facts, verdict_row
 
@@ -621,6 +646,22 @@ class TransferEngine:
                     )
                     assert request is not None
                     request.already_sent += transfer.amount
+                    if transfer.proof_owed:
+                        session.add(
+                            ProofObligation(
+                                family_id=transfer.family_id,
+                                request_id=transfer.request_id,
+                                transfer_id=transfer.id,
+                                amount=transfer.amount,
+                                status=ObligationStatus.OPEN,
+                            )
+                        )
+                        await audit_log.append(
+                            session,
+                            transfer.family_id,
+                            AuditEvent.PROOF_OWED,
+                            {"transfer_id": str(transfer.id), "amount": transfer.amount},
+                        )
 
             await audit_log.append(
                 session,

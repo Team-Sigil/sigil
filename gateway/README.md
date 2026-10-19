@@ -110,6 +110,7 @@ loads and verifies the facts and runs the money transaction around it.
 |---|---|---|
 | 1 | The dependent and family exist | `unknown dependent` |
 | 2 | The family is not frozen | `frozen by guardian` |
+| 2a | Request: no receipt is outstanding for money already sent | `proof outstanding` |
 | 3 | An active policy exists, its stored hash matches its body, and the guardian's signature covers that hash and version (re-verified every time) | `no active policy` / `policy signature invalid` |
 | 4 | The instruction names the active version | `stale policy version` |
 | 5 | The destination was registered with a valid guardian signature | `recipient not registered` |
@@ -119,7 +120,20 @@ loads and verifies the facts and runs the money transaction around it.
 | 9 | amount ≤ on-chain delegation − money pending from the same reservoir (all of the guardian's dependents); the delegate is the agent wallet **and the token account is owned by the guardian** | `insufficient delegation` |
 | 10 | Request: exists, belongs to the dependent, has an amount, and amount ≤ `amount_requested − already_sent − pending` (money cleared but not yet confirmed may still go out) | `unknown request` / `no amount requested` / `over requested amount` |
 | 11 | If the review rule fires: an unused `agree` verdict bound to this idempotency key, amount, category and dependent | `auditor verdict required` / `auditor verdict invalid` |
-| 12 | Proofs belong to this request; at or above the proof threshold, an unused image or OCR proof (not typed, not a duplicate) whose findings match and cover the amount | `unknown proof` / `proof not for this request` / `proof required` / `proof already used` / `proof does not cover the transfer` |
+| 12 | Proofs belong to this request, and any proof the agent attaches counts, is unused and covers the amount. Proof is **not** required up front (see "Proof after payment") | `unknown proof` / `proof not for this request` / `proof already used` / `proof does not cover the transfer` |
+
+**Proof after payment.** A dependent cannot buy anything before being paid, so a request
+at or above `proof_threshold` is **sent first** and leaves a receipt owed
+(`transfers.proof_owed`, then a row in `proof_obligations`). While one is open the
+dependent gets no more money: `POST /requests` returns `409 PROOF_OUTSTANDING` and the
+engine blocks a request transfer with `proof outstanding` (check 2a). A guardian override
+does not lift it. The scheduled allowance still runs, since it is the guardian's own
+standing instruction. The obligation is settled through
+`POST /agent/v1/proof-obligations/{id}/settle`, where the agent names the proof it read and
+what it found: the gateway checks that the proof belongs to the request, counts as proof,
+has not backed a transfer before and covers the amount, so a model cannot clear a debt by
+asserting it is paid. The single-use keys are unchanged, so one receipt still backs one
+payment, including across a guardian's dependents.
 
 **Review rule.** `engine/triggers.py` is a copy of the agent layer's `trusted_triggers`
 (amount ≥ review threshold or 25% of the cap, emergency, off-pattern amount, new category,
@@ -128,8 +142,8 @@ allowance above usual). The engine and the agent must agree; a parity test runs 
 
 **Guardian override.** When the guardian has signed "approve N" for a request, the engine
 finds that answer itself and re-verifies its signature. Exactly that amount may then pass
-checks 7, 8 and 11. It never skips freeze, the signed policy, the destination, delegation,
-the requested amount or proofs. The agent has no way to claim an approval.
+checks 7, 8 and 11. It never skips freeze, an outstanding receipt, the signed
+policy, the destination, delegation or the requested amount. The agent has no way to claim an approval.
 
 **Allowance.** Capped by the guardian's signed allowance amount, not by `max_per_request`
 (which is for one-off requests). One allowance per ISO week, enforced by the key. Raising
@@ -215,6 +229,7 @@ App guide: [docs/app-handoff.md](docs/app-handoff.md).
 | POST | `/requests` | dependent | `{message, amount_requested?, emergency_claimed?}` → `{request, decision}` |
 | POST | `/requests/{id}/messages` | dependent | `{message, amount_requested?}` → `{request, decision}` |
 | POST | `/requests/{id}/proofs` | dependent | multipart `file`, `kind` (`receipt\|quote\|photo`), and for an in-app capture `capture_claim` + `capture_signature` → `{proof, decision}` |
+| GET | `/proof-obligations` | member | receipts owed for money already sent: `{id, request_id, transfer_id, amount, created_at}`; while any is open the dependent cannot ask for more |
 | POST | `/capture/challenge` | dependent | → `{challenge, expires_at}` for enrolling a phone |
 | POST | `/capture/devices` | dependent | `{challenge, key_id, attestation_object}` (App Attest, base64) → device |
 | GET | `/capture/devices`; DELETE `/capture/devices/{id}` | member | list; revoke (dependents their own iPhone, guardians any family device) |
@@ -292,8 +307,10 @@ nonce:{nonce}
 ```
 
 **Proofs.** A JPEG, PNG or WebP image (typed from its bytes, not the `Content-Type`; send
-iPhone photos as JPEG, not HEIC; at least 200 px), or plain text (stored as the dependent's
-claim, never as evidence). Up to 15 MB as uploaded and 3 per request. The gateway applies
+iPhone photos as JPEG, not HEIC; at least 200 px), a **PDF** (an online order's receipt,
+which cannot be photographed; stored as uploaded and flagged `unchecked_document`, because
+whether the document is genuine is not checked yet), or plain text (stored as the
+dependent's claim, never as evidence). Up to 15 MB as uploaded and 3 per request. The gateway applies
 the EXIF rotation, strips all metadata (GPS included) by re-encoding, limits the long edge to
 2,576 px and keeps the stored copy under 3.75 MB; the agent only sees that copy, and the
 original is kept encrypted. Flags set at upload: `duplicate` (same bytes as an earlier proof from
@@ -341,7 +358,8 @@ streaming); never put it in the URL. Dependents do not receive `question` events
 **Errors.** `{"error": {"code": "UPPER_SNAKE", "message": "…"}}`: `UNAUTHORIZED` 401,
 `FORBIDDEN` 403, `NOT_FOUND` 404, `CONFLICT` / `INTERVIEW_TOO_LONG` 409, `VALIDATION_ERROR` /
 `INVALID_ANSWER` / `INTERVIEW_MESSAGE_REQUIRED` /
-`UNSUPPORTED_PROOF` / `ATTESTATION_FAILED` 422, `PAYLOAD_TOO_LARGE` 413, `RATE_LIMITED` /
+`UNSUPPORTED_PROOF` / `ATTESTATION_FAILED` 422, `PAYLOAD_TOO_LARGE` 413, `PROOF_OUTSTANDING`
+409, `RATE_LIMITED` /
 `DAILY_LIMIT_REACHED` 429, `AGENT_UNAVAILABLE`
 502, `INTERNAL_ERROR` 500. Validation errors name fields but never echo input.
 

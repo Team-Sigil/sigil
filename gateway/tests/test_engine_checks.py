@@ -5,7 +5,13 @@ import pytest
 
 from gateway.contracts.agent import HistoryItem, Proof, ProofFindingsRecord, TransferInstruction
 from gateway.contracts.policy import PolicyBody
-from gateway.engine.checks import RequestFacts, TransferFacts, VerdictFacts, check_transfer
+from gateway.engine.checks import (
+    RequestFacts,
+    TransferFacts,
+    VerdictFacts,
+    check_transfer,
+    owes_proof_after,
+)
 
 AUSD = 1_000_000
 DEP = "d1"
@@ -229,18 +235,33 @@ class TestProofs:
         values.update(overrides)
         return check_transfer(facts(**values))
 
+    def test_usable_proof_settles_it_outright(self) -> None:
+        t = self.needs_proof()
+        assert self.check(t) is None
+        settled = facts(instruction=t, verdict=agree(t), proofs=[proof()])
+        assert not owes_proof_after(settled, POLICY)
+
     def test_below_threshold_needs_no_proof(self) -> None:
         assert check_transfer(facts(instruction=instruction(amount=24 * AUSD))) is None
 
-    def test_missing_proof_blocks(self) -> None:
+    def test_missing_proof_sends_and_owes_a_receipt(self) -> None:
+        # The dependent cannot buy anything before being paid, so the money goes out and
+        # the receipt is owed afterwards (SPEC §8.9).
         t = self.needs_proof(proof_ids=[], proof_findings=None)
-        assert self.check(t, proofs=[]) == "proof required"
+        assert self.check(t, proofs=[]) is None
+        assert owes_proof_after(facts(instruction=t, verdict=agree(t), proofs=[]), POLICY)
 
     @pytest.mark.parametrize(
         "bad", [{"source": "typed"}, {"flags": ["duplicate"]}, {"media_type": "text/plain"}]
     )
-    def test_proof_that_does_not_count_blocks(self, bad: dict[str, Any]) -> None:
-        assert self.check(self.needs_proof(), proofs=[proof(**bad)]) == "proof required"
+    def test_proof_that_does_not_count_still_owes_a_receipt(self, bad: dict[str, Any]) -> None:
+        # It no longer blocks the transfer, but a typed claim or a duplicate does not
+        # settle the debt either: a real receipt is still owed.
+        t = self.needs_proof()
+        assert self.check(t, proofs=[proof(**bad)]) is None
+        assert owes_proof_after(
+            facts(instruction=t, verdict=agree(t), proofs=[proof(**bad)]), POLICY
+        )
 
     @pytest.mark.parametrize("key", ["id:p1", "sha256:" + "a" * 64])
     def test_reused_proof_blocks(self, key: str) -> None:
@@ -320,8 +341,10 @@ class TestGuardianOverride:
     def test_override_clears_over_limit_request(self) -> None:
         assert check_transfer(self.approved()) is None
 
-    def test_override_does_not_skip_proof(self) -> None:
-        assert check_transfer(self.approved(proofs=[proof(source="typed")])) == "proof required"
+    def test_override_does_not_skip_an_outstanding_receipt(self) -> None:
+        # A signed approval buys past the caps and the review, never past money that is
+        # already out and waiting on its receipt.
+        assert check_transfer(self.approved(owes_proof=True)) == "proof outstanding"
 
     def test_same_request_without_override_is_blocked(self) -> None:
         assert check_transfer(self.approved(guardian_override=False)) == "over max per request"

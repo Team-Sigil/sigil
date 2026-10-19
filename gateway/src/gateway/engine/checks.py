@@ -65,6 +65,9 @@ class TransferFacts:
     # was found and verified (SPEC SEC-05). Lets the transfer past the amount cap, the weekly
     # cap and the Auditor requirement; never past anything else.
     guardian_override: bool = False
+    # An earlier transfer at or above the proof threshold whose receipt has not arrived yet.
+    # The dependent gets no more money until it is settled (SPEC §8.9).
+    owes_proof: bool = False
 
 
 def check_transfer(facts: TransferFacts) -> str | None:
@@ -84,6 +87,10 @@ def check_transfer(facts: TransferFacts) -> str | None:
         return "stale policy version"
     if not facts.destination_registered:
         return "recipient not registered"
+    # Money already sent is waiting on its receipt. The scheduled allowance is the
+    # guardian's own standing instruction, so it is not held back by this.
+    if facts.owes_proof and t.trigger == "request":
+        return "proof outstanding"
     policy = facts.policy
 
     if t.category in policy.blocked_categories:
@@ -155,14 +162,21 @@ def _review_failure(facts: TransferFacts, policy: PolicyBody) -> str | None:
 
 
 def _proof_failure(facts: TransferFacts, policy: PolicyBody) -> str | None:
-    """The engine's own proof records decide, not the agent's claims."""
+    """The engine's own proof records decide, not the agent's claims.
+
+    Proof no longer has to exist before the money moves: a dependent cannot buy anything
+    without being paid first, so a transfer at or above `proof_threshold` goes out and
+    leaves an obligation behind (`owes_proof`). What this still enforces is that any proof
+    the agent *does* attach is real, belongs to the request, and has not already backed a
+    transfer — so a receipt can never be spent twice.
+    """
     t = facts.instruction
     if any(p is None for p in facts.proofs):
         return "unknown proof"
     proofs = [p for p in facts.proofs if p is not None]
     if any(p.request_id != t.request_id or p.dependent_id != t.dependent_id for p in proofs):
         return "proof not for this request"
-    if t.trigger != "request" or t.amount < policy.proof_threshold:
+    if t.trigger != "request" or not proofs:
         return None
 
     def counts(p: Proof) -> bool:
@@ -175,10 +189,35 @@ def _proof_failure(facts: TransferFacts, policy: PolicyBody) -> str | None:
         if counts(p) and not set(proof_keys(p, t.proof_findings)) & facts.used_proof_keys
     ]
     if not usable:
-        return "proof already used" if any(counts(p) for p in proofs) else "proof required"
+        # Nothing attached that counts: the transfer still goes out and the receipt is owed.
+        return "proof already used" if any(counts(p) for p in proofs) else None
     findings = t.proof_findings
     if findings is None or not findings.matches_claim or findings.total < t.amount:
         return "proof does not cover the transfer"
     if facts.receipt_already_used:
         return "proof already used"
     return None
+
+
+def owes_proof_after(facts: TransferFacts, policy: PolicyBody) -> bool:
+    """Whether this cleared transfer leaves a receipt owed.
+
+    Owed for a request at or above the threshold, unless a proof that *counts* as evidence
+    already covered it. Typed text is the dependent's claim, not evidence, so it never
+    settles the debt.
+    """
+    t = facts.instruction
+    if t.trigger != "request" or t.amount < policy.proof_threshold:
+        return False
+    findings = t.proof_findings
+    if findings is None or not findings.matches_claim or findings.total < t.amount:
+        return True
+    return not any(
+        counts_as_proof(
+            p,
+            camera_only=facts.camera_only,
+            origin=facts.proof_origins.get(p.derived_from) if p.derived_from else None,
+        )
+        for p in facts.proofs
+        if p is not None
+    )
