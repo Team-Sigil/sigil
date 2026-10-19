@@ -28,7 +28,7 @@ from gateway.db import audit_log
 from gateway.db.models import Decision, Family, Message, Proof
 from gateway.db.models import Request as RequestRow
 from gateway.db.session import SessionDep
-from gateway.engine.transfers import has_open_obligation, parse_uuid
+from gateway.engine.transfers import has_open_obligation, owed_since, parse_uuid
 from gateway.enums import AuditEvent, Role, ThreadRole
 from gateway.proof_images import NEAR_DUPLICATE_BITS, ImageRejectedError, hamming, normalise
 from gateway.proof_pdf import PdfSignatureError, SignedPdf
@@ -284,7 +284,13 @@ async def upload_proof(
 ) -> UploadedProof:
     row = await family_request(session, dependent, request_id)
     await enforce_daily_limit(session, dependent, _daily_limit(request))
-    count = await session.scalar(select(func.count()).where(Proof.request_id == row.id))
+    # Once a receipt is owed, the limit starts again: proofs sent before the money went out
+    # must not leave the dependent unable to send the receipt (SPEC §8.9).
+    counted = select(func.count()).where(Proof.request_id == row.id)
+    opened = await owed_since(session, row.id)
+    if opened is not None:
+        counted = counted.where(Proof.uploaded_at >= opened)
+    count = await session.scalar(counted)
     if (count or 0) >= MAX_PROOFS_PER_REQUEST:
         raise ConflictError("A request can have at most 3 proofs.")
 

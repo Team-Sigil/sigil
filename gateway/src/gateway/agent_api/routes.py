@@ -140,14 +140,24 @@ async def request_proof(
 
 @router.post("/proof-obligations/{obligation_id}/settle")
 async def settle_proof_obligation(
-    obligation_id: str, body: SettleObligation, _: MakerDep, session: SessionDep
+    obligation_id: str,
+    body: SettleObligation,
+    _: MakerDep,
+    session: SessionDep,
+    engine: EngineDep,
 ) -> SettledObligation:
     """Close a receipt the dependent owed.
 
     The agent says which proof it read and what it found; the gateway decides whether that
     settles the obligation, so a model can never clear a debt by asserting that it is paid.
     """
-    return await service.settle_obligation(session, obligation_id, body)
+    return await service.settle_obligation(
+        session,
+        obligation_id,
+        body,
+        camera_only=engine.camera_only,
+        fingerprint_key=engine.fingerprint_key,
+    )
 
 
 @router.post("/policy-proposals")

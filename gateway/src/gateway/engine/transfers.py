@@ -58,6 +58,7 @@ from gateway.engine.checks import (
     TransferFacts,
     VerdictFacts,
     check_transfer,
+    evidence,
     owes_proof_after,
 )
 from gateway.engine.proofs import keyed_fingerprint, proof_keys
@@ -125,14 +126,37 @@ async def verified_approvals(
 
 
 async def has_open_obligation(session: AsyncSession, family_id: uuid.UUID) -> bool:
-    """True while a receipt is owed for money already sent to this dependent."""
+    """True while a receipt is owed for money sent to this dependent, or for money cleared
+    that will owe one once it lands: a pending transfer has no obligation row yet, but it
+    must still hold back the next one."""
     found = await session.scalar(
         select(ProofObligation.id).where(
             ProofObligation.family_id == family_id,
             ProofObligation.status == ObligationStatus.OPEN,
         )
     )
-    return found is not None
+    if found is not None:
+        return True
+    pending = await session.scalar(
+        select(Transfer.id).where(
+            Transfer.family_id == family_id,
+            Transfer.proof_owed.is_(True),
+            Transfer.status == TransferStatus.PENDING,
+        )
+    )
+    return pending is not None
+
+
+async def owed_since(session: AsyncSession, request_id: uuid.UUID) -> datetime | None:
+    """When the receipt this request owes became due, or None. Proofs from before then were
+    for the decision that sent the money; the owed receipt is judged on the ones after."""
+    opened: datetime | None = await session.scalar(
+        select(ProofObligation.created_at).where(
+            ProofObligation.request_id == request_id,
+            ProofObligation.status == ObligationStatus.OPEN,
+        )
+    )
+    return opened
 
 
 async def pending_amount(session: AsyncSession, request_id: uuid.UUID) -> int:
@@ -202,6 +226,14 @@ class TransferEngine:
         self._camera_only = camera_only
         self._fingerprint_key = fingerprint_key
         self._clock = clock
+
+    @property
+    def camera_only(self) -> bool:
+        return self._camera_only
+
+    @property
+    def fingerprint_key(self) -> bytes:
+        return self._fingerprint_key
 
     async def submit(self, t: TransferInstruction) -> TransferResult:
         async with self._sessionmaker() as session:
@@ -297,8 +329,8 @@ class TransferEngine:
             budget.reserved += t.amount
             if verdict_row is not None and facts.verdict is not None:
                 verdict_row.used = True
-            for proof in facts.proofs:
-                assert proof is not None
+            backing = evidence(facts)
+            for proof in backing:
                 for key in proof_keys(proof, t.proof_findings):
                     session.add(
                         UsedProofKey(
@@ -308,7 +340,7 @@ class TransferEngine:
                             transfer_id=transfer.id,
                         )
                     )
-            if t.proof_findings is not None and t.proof_ids:
+            if t.proof_findings is not None and backing:
                 session.add(
                     ReceiptFingerprint(
                         key_hash=keyed_fingerprint(t.proof_findings, self._fingerprint_key),

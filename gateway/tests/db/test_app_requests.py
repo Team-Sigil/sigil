@@ -180,7 +180,8 @@ class TestProofs:
 
     @pytest.mark.parametrize(
         ("data", "content_type"),
-        [(b"<script>alert(1)</script>", "image/jpeg"), (b"%PDF-1.7", "application/pdf")],
+        # PDFs are accepted now (online orders); see test_proof_obligations.TestOnlineOrders.
+        [(b"<script>alert(1)</script>", "image/jpeg"), (b"PK\x03\x04zip", "application/zip")],
     )
     async def test_non_images_are_refused(
         self, app_client: httpx.AsyncClient, world: World, data: bytes, content_type: str

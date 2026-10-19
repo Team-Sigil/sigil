@@ -34,7 +34,10 @@ from cryptography.x509.oid import NameOID
 
 # A signature dictionary names the ranges it covers and carries the CMS blob between them.
 BYTE_RANGE = re.compile(rb"/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]")
-CONTENTS = re.compile(rb"/Contents\s*<([0-9A-Fa-f\s]+)>")
+# The gap the byte range leaves is the /Contents hex string, `<` and `>` included
+# (ISO 32000-1 §12.8.1), and nothing else.
+CONTENTS_HOLE = re.compile(rb"<([0-9A-Fa-f\s]+)>")
+CONTENTS_KEY = re.compile(rb"/Contents\s*$")
 
 DIGESTS: dict[str, hashes.HashAlgorithm] = {
     "sha256": hashes.SHA256(),
@@ -88,8 +91,7 @@ def _extract(pdf: bytes) -> tuple[bytes, bytes]:
     file that looks signed, so a mismatch is refused rather than ignored.
     """
     ranges = BYTE_RANGE.search(pdf)
-    contents = CONTENTS.search(pdf)
-    if ranges is None or contents is None:
+    if ranges is None:
         raise PdfSignatureError("no signature in the document")
 
     start_a, length_a, start_b, length_b = (int(value) for value in ranges.groups())
@@ -99,9 +101,10 @@ def _extract(pdf: bytes) -> tuple[bytes, bytes]:
     if start_b + length_b != len(pdf):
         raise PdfSignatureError("content was added after the document was signed")
 
-    # The hole left out of the ranges must be exactly the hex of /Contents; otherwise the
+    # The hole left out of the ranges must be exactly the /Contents string; otherwise the
     # signature covers bytes other than the ones it appears to.
-    if contents.start(1) != hole_start or contents.end(1) > hole_end:
+    contents = CONTENTS_HOLE.fullmatch(pdf, hole_start, hole_end)
+    if contents is None or CONTENTS_KEY.search(pdf, max(0, hole_start - 32), hole_start) is None:
         raise PdfSignatureError("the signature is not where the byte range leaves a gap")
 
     signed = pdf[start_a : start_a + length_a] + pdf[start_b : start_b + length_b]

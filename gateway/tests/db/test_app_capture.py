@@ -7,12 +7,12 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from gateway.capture.config import CaptureConfig
 from gateway.contracts.agent import ProofFindingsRecord
 from gateway.core.config import Settings
-from gateway.db.models import CaptureTicket, Request
+from gateway.db.models import CaptureTicket, Request, Transfer
 from gateway.engine.transfers import TransferEngine
 from gateway.main import create_app
 from tests.capture_fakes import APP_ID, AppleDevice
@@ -361,15 +361,27 @@ class TestCameraOnlyEngine:
         )
         return result.reason if result.status == "blocked" else result.status
 
+    async def owes_receipt(self, world: World, request: Request) -> bool:
+        """Proof comes after payment (SPEC §8.9): a proof that doesn't count leaves the
+        transfer owing a receipt instead of blocking it."""
+        async with world.sessionmaker() as session:
+            owed = await session.scalar(
+                select(Transfer.proof_owed).where(Transfer.request_id == request.id)
+            )
+        assert owed is not None
+        return owed
+
     async def test_plain_file_is_not_proof(self, world: World) -> None:
         request = await world.add_request(30 * AUSD)
         proof = await world.add_proof(request, source="file")
-        assert await self.transfer(world, [str(proof.id)], request) == "proof required"
+        assert await self.transfer(world, [str(proof.id)], request) == "sent"
+        assert await self.owes_receipt(world, request)
 
     async def test_verified_photo_is_proof(self, world: World) -> None:
         request = await world.add_request(30 * AUSD)
         proof = await world.add_proof(request, source="photo")
         assert await self.transfer(world, [str(proof.id)], request) == "sent"
+        assert not await self.owes_receipt(world, request)
 
     async def test_ocr_counts_only_when_read_from_a_verified_photo(self, world: World) -> None:
         request = await world.add_request(30 * AUSD)
@@ -378,10 +390,14 @@ class TestCameraOnlyEngine:
             request, b"Total 30.00", source="ocr", media_type="text/plain", derived_from=photo
         )
         assert await self.transfer(world, [str(ocr.id)], request) == "sent"
+        assert not await self.owes_receipt(world, request)
 
         other = await world.add_request(30 * AUSD)
         upload = await world.add_proof(other, b"upload", source="file")
         ocr_of_file = await world.add_proof(
             other, b"Total 30.00 again", source="ocr", media_type="text/plain", derived_from=upload
         )
-        assert await self.transfer(world, [str(ocr_of_file.id)], other) == "proof required"
+        # The same receipt read again, but from a file: it backs nothing, so it isn't spent
+        # (no "proof already used") and the transfer owes a real receipt.
+        assert await self.transfer(world, [str(ocr_of_file.id)], other) == "sent"
+        assert await self.owes_receipt(world, other)

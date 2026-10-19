@@ -104,6 +104,17 @@ class TestRefused:
         with pytest.raises(PdfSignatureError):
             verify(pdf, trusted_roots=[ROOT.certificate], allowed_signers=["Lazada"])
 
+    def test_a_gap_that_leaves_out_the_delimiters(self) -> None:
+        """Real signers leave the whole `<…>` string out of the byte range (ISO 32000-1
+        §12.8.1); a gap of only the hex inside it is not where the signature is."""
+        start = SIGNED.index(b"/Contents <") + len(b"/Contents ")
+        end = start + signed_pdf.SIGNATURE_BYTES * 2 + 2
+        old = SIGNED[SIGNED.index(b"[0 ") :][:45]
+        inner = f"[0 {start + 1} {end - 1} {len(SIGNED) - end + 1}]".encode().ljust(45, b" ")
+        shifted = SIGNED.replace(old, inner)
+        with pytest.raises(PdfSignatureError, match="not where the byte range leaves a gap"):
+            verify(shifted, trusted_roots=[ROOT.certificate], allowed_signers=["Lazada"])
+
     def test_a_signature_that_is_not_cms(self) -> None:
         start = SIGNED.index(b"/Contents <") + len(b"/Contents <")
         length = signed_pdf.SIGNATURE_BYTES * 2

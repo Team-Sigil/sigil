@@ -124,16 +124,21 @@ loads and verifies the facts and runs the money transaction around it.
 
 **Proof after payment.** A dependent cannot buy anything before being paid, so a request
 at or above `proof_threshold` is **sent first** and leaves a receipt owed
-(`transfers.proof_owed`, then a row in `proof_obligations`). While one is open the
-dependent gets no more money: `POST /requests` returns `409 PROOF_OUTSTANDING` and the
-engine blocks a request transfer with `proof outstanding` (check 2a). A guardian override
-does not lift it. The scheduled allowance still runs, since it is the guardian's own
-standing instruction. The obligation is settled through
-`POST /agent/v1/proof-obligations/{id}/settle`, where the agent names the proof it read and
-what it found: the gateway checks that the proof belongs to the request, counts as proof,
-has not backed a transfer before and covers the amount, so a model cannot clear a debt by
-asserting it is paid. The single-use keys are unchanged, so one receipt still backs one
-payment, including across a guardian's dependents.
+(`transfers.proof_owed`, then a row in `proof_obligations` once the money lands). While one
+is open, **or a transfer that will owe one is still pending**, the dependent gets no more
+money: `POST /requests` returns `409 PROOF_OUTSTANDING` and the engine blocks a request
+transfer with `proof outstanding` (check 2a). A guardian override does not lift it. The
+scheduled allowance still runs, since it is the guardian's own standing instruction. Only
+attached proofs that count as evidence back a transfer and have their keys spent, so a
+receipt shown as a non-counting file can still settle what is owed. Once a receipt is
+owed, the 3-proof limit on the request starts again and the agent sees only the proofs sent
+since. The obligation is settled through `POST /agent/v1/proof-obligations/{id}/settle`,
+where the agent names the proof it read and what it found: under the reservoir lock, the
+gateway applies the engine's rules (the proof belongs to the request, counts as proof with
+camera-only mode applied, has not backed a transfer for any of the guardian's dependents,
+matches no receipt used in any family, covers the amount) and spends its keys against the
+transfer it settles, so a model cannot clear a debt by asserting it is paid and one receipt
+still backs one payment.
 
 **Review rule.** `engine/triggers.py` is a copy of the agent layer's `trusted_triggers`
 (amount ≥ review threshold or 25% of the cap, emergency, off-pattern amount, new category,

@@ -179,18 +179,13 @@ def _proof_failure(facts: TransferFacts, policy: PolicyBody) -> str | None:
     if t.trigger != "request" or not proofs:
         return None
 
-    def counts(p: Proof) -> bool:
-        origin = facts.proof_origins.get(p.derived_from) if p.derived_from else None
-        return counts_as_proof(p, camera_only=facts.camera_only, origin=origin)
-
+    counting = evidence(facts)
     usable = [
-        p
-        for p in proofs
-        if counts(p) and not set(proof_keys(p, t.proof_findings)) & facts.used_proof_keys
+        p for p in counting if not set(proof_keys(p, t.proof_findings)) & facts.used_proof_keys
     ]
     if not usable:
         # Nothing attached that counts: the transfer still goes out and the receipt is owed.
-        return "proof already used" if any(counts(p) for p in proofs) else None
+        return "proof already used" if counting else None
     findings = t.proof_findings
     if findings is None or not findings.matches_claim or findings.total < t.amount:
         return "proof does not cover the transfer"
@@ -212,12 +207,20 @@ def owes_proof_after(facts: TransferFacts, policy: PolicyBody) -> bool:
     findings = t.proof_findings
     if findings is None or not findings.matches_claim or findings.total < t.amount:
         return True
-    return not any(
-        counts_as_proof(
+    return not evidence(facts)
+
+
+def evidence(facts: TransferFacts) -> list[Proof]:
+    """The attached proofs that count as evidence. Only these back a transfer and have their
+    keys spent; anything else backed nothing, so the receipt it shows can still settle what
+    is owed (SPEC §8.9)."""
+    return [
+        p
+        for p in facts.proofs
+        if p is not None
+        and counts_as_proof(
             p,
             camera_only=facts.camera_only,
             origin=facts.proof_origins.get(p.derived_from) if p.derived_from else None,
         )
-        for p in facts.proofs
-        if p is not None
-    )
+    ]

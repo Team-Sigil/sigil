@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from asn1crypto import algos, cms
+from asn1crypto import algos, cms  # type: ignore[import-untyped]
 from asn1crypto import x509 as asn1_x509
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -81,9 +81,7 @@ def _cms(signed_bytes: bytes, issued: Issued) -> bytes:
 
     attributes = cms.CMSAttributes(
         [
-            cms.CMSAttribute(
-                {"type": "content_type", "values": [cms.ContentType("data")]}
-            ),
+            cms.CMSAttribute({"type": "content_type", "values": [cms.ContentType("data")]}),
             cms.CMSAttribute(
                 {
                     "type": "signing_time",
@@ -114,9 +112,7 @@ def _cms(signed_bytes: bytes, issued: Issued) -> bytes:
             ),
             "digest_algorithm": algos.DigestAlgorithm({"algorithm": "sha256"}),
             "signed_attrs": attributes,
-            "signature_algorithm": algos.SignedDigestAlgorithm(
-                {"algorithm": "rsassa_pkcs1v15"}
-            ),
+            "signature_algorithm": algos.SignedDigestAlgorithm({"algorithm": "rsassa_pkcs1v15"}),
             "signature": signature,
         }
     )
@@ -129,7 +125,8 @@ def _cms(signed_bytes: bytes, issued: Issued) -> bytes:
             "signer_infos": [signer_info],
         }
     )
-    return cms.ContentInfo({"content_type": "signed_data", "content": signed_data}).dump()
+    der: bytes = cms.ContentInfo({"content_type": "signed_data", "content": signed_data}).dump()
+    return der
 
 
 def build(issued: Issued, *, body: str = "Lazada order 12345  THB 520.00") -> bytes:
@@ -148,20 +145,22 @@ def build(issued: Issued, *, body: str = "Lazada order 12345  THB 520.00") -> by
             + b"> >>\nendobj\n%%EOF\n"
         )
 
+    # The hole is the whole /Contents string, `<` and `>` included, as real signers leave it
+    # (ISO 32000-1 §12.8.1).
+    def hole(laid_out: bytes) -> tuple[int, int]:
+        start = laid_out.index(b"/Contents <") + len(b"/Contents ")
+        return start, start + len(placeholder) + 2
+
     template = assemble(b"[0000000000 0000000000 0000000000 0000000000]", placeholder)
-    hole_start = template.index(b"/Contents <") + len(b"/Contents <")
-    hole_end = hole_start + len(placeholder)
-    byte_range = (
-        f"[0 {hole_start} {hole_end} {len(template) - hole_end}]".encode().ljust(45, b" ")
-    )
+    hole_start, hole_end = hole(template)
+    byte_range = f"[0 {hole_start} {hole_end} {len(template) - hole_end}]".encode().ljust(45, b" ")
     # Keep the length identical so the offsets computed above still hold.
     byte_range = byte_range[:45]
     laid_out = assemble(byte_range, placeholder)
-    hole_start = laid_out.index(b"/Contents <") + len(b"/Contents <")
-    hole_end = hole_start + len(placeholder)
-    byte_range = (
-        f"[0 {hole_start} {hole_end} {len(laid_out) - hole_end}]".encode().ljust(45, b" ")[:45]
-    )
+    hole_start, hole_end = hole(laid_out)
+    byte_range = f"[0 {hole_start} {hole_end} {len(laid_out) - hole_end}]".encode().ljust(45, b" ")[
+        :45
+    ]
     laid_out = assemble(byte_range, placeholder)
 
     signed_bytes = laid_out[:hole_start] + laid_out[hole_end:]
