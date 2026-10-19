@@ -3,11 +3,17 @@
 import asyncio
 
 import httpx
+import pytest
 from nacl.signing import SigningKey
+from sqlalchemy.exc import IntegrityError
 
+from gateway.contracts.agent import ProofFindingsRecord
+from gateway.db.models import UsedProofKey
 from tests.db import test_app_families_policy as families
 from tests.db.test_agent_api import MAKER
 from tests.db.test_app_auth import login
+from tests.db.test_app_requests import JPEG, new_request, upload
+from tests.db.test_schema import _transfer
 from tests.db.world import AUSD, World, wallet
 
 
@@ -124,6 +130,70 @@ class TestSharedReservoir:
         request = await sibling.add_request(20 * AUSD)
         result = await sibling.engine.submit(sibling.instruction(request, amount=20 * AUSD))
         assert result.status == "sent", result
+
+
+class TestSiblingsCannotShareReceipts:
+    """Attack: one dependent passes a paid receipt to a sibling, who claims it again."""
+
+    @staticmethod
+    def findings(receipt_number: str) -> ProofFindingsRecord:
+        return ProofFindingsRecord(
+            merchant="Book Shop",
+            date="2026-10-14",
+            total=30 * AUSD,
+            receipt_number=receipt_number,
+            matches_claim=True,
+        )
+
+    async def test_same_receipt_file_is_refused_for_a_sibling(self, world: World) -> None:
+        sibling = await world.sibling()
+        # Different findings, so only the shared file hash can catch the reuse.
+        for who, receipt_number, expected in (
+            (world, "R-1", "sent"),
+            (sibling, "R-2", "proof already used"),
+        ):
+            request = await who.add_request(30 * AUSD)
+            proof = await who.add_proof(request, content=b"the-same-receipt-photo")
+            result = await who.engine.submit(
+                who.instruction(
+                    request,
+                    amount=30 * AUSD,
+                    proof_ids=[str(proof.id)],
+                    proof_findings=self.findings(receipt_number),
+                )
+            )
+            assert (result.reason if result.status == "blocked" else result.status) == expected
+
+    async def test_upload_of_a_siblings_receipt_is_flagged(
+        self, app_client: httpx.AsyncClient, world: World
+    ) -> None:
+        sibling = await world.sibling()
+        first = await login(app_client, world.dependent_key)
+        second = await login(app_client, sibling.dependent_key)
+        request_a = (await new_request(app_client, first))["request"]["id"]
+        request_b = (await new_request(app_client, second))["request"]["id"]
+        await upload(app_client, first, request_a, JPEG)
+        again = await upload(app_client, second, request_b, JPEG)
+        assert again.json()["proof"]["flags"] == ["duplicate"]
+
+    async def test_database_refuses_a_key_used_by_a_sibling(self, world: World) -> None:
+        """Even past the engine's check, one receipt key backs one transfer per guardian."""
+        sibling = await world.sibling()
+        async with world.sessionmaker() as session:
+            transfers = [_transfer(w.family, f"req:{w.family.id}:1") for w in (world, sibling)]
+            session.add_all(transfers)
+            await session.flush()
+            session.add_all(
+                UsedProofKey(
+                    guardian_user_id=w.family.guardian_user_id,
+                    key="sha256:abc",
+                    family_id=w.family.id,
+                    transfer_id=t.id,
+                )
+                for w, t in zip((world, sibling), transfers, strict=True)
+            )
+            with pytest.raises(IntegrityError, match="pk_used_proof_keys"):
+                await session.commit()
 
 
 class TestPlatformApi:

@@ -366,13 +366,15 @@ class ReceiptFingerprint(Base):
 
 
 class UsedProofKey(Base):
-    """A proof id, content hash or receipt fingerprint that already backed a transfer in the
-    family. Inserted in the same transaction as the transfer, so one receipt backs one transfer."""
+    """A proof id, content hash or receipt fingerprint that already backed a transfer for any of
+    the guardian's dependents (siblings can't reuse each other's receipts). Inserted in the same
+    transaction as the transfer, so one receipt backs one transfer."""
 
     __tablename__ = "used_proof_keys"
 
-    family_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("families.id"), primary_key=True)
+    guardian_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
     key: Mapped[str] = mapped_column(String(300), primary_key=True)
+    family_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("families.id"))
     transfer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("transfers.id"))
     created_at: Mapped[datetime] = created_at()
 

@@ -57,7 +57,7 @@ def keyed_fingerprint(findings: ProofFindingsRecord, key: bytes) -> str:
 
 def proof_keys(proof: Proof, findings: ProofFindingsRecord | None) -> list[str]:
     """A proof is used if its id, its content hash or its receipt fingerprint backed an earlier
-    transfer in the family."""
+    transfer for any of the guardian's dependents."""
     keys = [f"id:{proof.id}"]
     if proof.sha256:
         keys.append(f"sha256:{proof.sha256}")

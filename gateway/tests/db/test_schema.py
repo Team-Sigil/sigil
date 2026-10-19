@@ -178,8 +178,13 @@ class TestConstraints:
             await session.flush()
             session.add_all(
                 [
-                    UsedProofKey(family_id=family.id, key="sha256:abc", transfer_id=first.id),
-                    UsedProofKey(family_id=family.id, key="sha256:abc", transfer_id=second.id),
+                    UsedProofKey(
+                        guardian_user_id=family.guardian_user_id,
+                        key="sha256:abc",
+                        family_id=family.id,
+                        transfer_id=transfer.id,
+                    )
+                    for transfer in (first, second)
                 ]
             )
             with pytest.raises(IntegrityError, match="pk_used_proof_keys"):

@@ -77,10 +77,10 @@ The mock platform already keys delegations and used proofs by guardian, so sibli
 is modelled. A second seeded dependent for `g1` (in `mock_platform/seed.py`) would let your
 tests cover `reservoir_check` and `learning_proposals` with two siblings.
 
-## Known difference (gateway side, being fixed)
+## Used proofs now match your mock
 
-Your mock counts a used proof (id, SHA-256, receipt fingerprint) once per guardian. The
-gateway counts proof ids and SHA-256 per family, and only the keyed receipt fingerprint
-across all families. So siblings uploading the same image file is caught only when the agent
-reports `proof_findings`. We will widen the check to the guardian's families to match your
-mock. No change is needed from you.
+Your mock counts a used proof (id, SHA-256, receipt fingerprint) once per guardian, and so
+does the gateway now: a receipt that paid for one dependent is refused for a sibling
+(`proof already used`), and re-uploading a sibling's file is flagged `duplicate` /
+`near_duplicate`. The keyed receipt fingerprint is still shared across all families. No
+change is needed from you.

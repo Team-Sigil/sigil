@@ -276,7 +276,14 @@ class TransferEngine:
             for proof in facts.proofs:
                 assert proof is not None
                 for key in proof_keys(proof, t.proof_findings):
-                    session.add(UsedProofKey(family_id=family.id, key=key, transfer_id=transfer.id))
+                    session.add(
+                        UsedProofKey(
+                            guardian_user_id=family.guardian_user_id,
+                            key=key,
+                            family_id=family.id,
+                            transfer_id=transfer.id,
+                        )
+                    )
             if t.proof_findings is not None and t.proof_ids:
                 session.add(
                     ReceiptFingerprint(
@@ -427,8 +434,9 @@ class TransferEngine:
                 )
             ) is not None
 
+        # Across all of the guardian's dependents: siblings can't reuse each other's receipts.
         used_keys = await session.scalars(
-            select(UsedProofKey.key).where(UsedProofKey.family_id == family.id)
+            select(UsedProofKey.key).where(UsedProofKey.guardian_user_id == family.guardian_user_id)
         )
 
         override = False

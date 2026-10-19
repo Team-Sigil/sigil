@@ -168,7 +168,7 @@ it needs the guardian.
 | SEC-19 | Errors use one envelope, never stack traces or upstream details | `core/errors.py`, `agent_client.py` | error tests |
 | SEC-20 | Missing or unverifiable data blocks (default deny) | `engine/checks.py` | per-check tests |
 | — | Reservoir ownership: only spend from a token account owned by the guardian | `engine/transfers.py` | another family's reservoir |
-| — | One receipt backs one transfer (id, hash and receipt fingerprint), across requests and across families (keyed fingerprint) | `engine/proofs.py`, `used_proof_keys`, `receipt_fingerprints` | proof reuse tests |
+| — | One receipt backs one transfer (id, hash and receipt fingerprint), across requests and across a guardian's dependents, and across all families (keyed fingerprint) | `engine/proofs.py`, `used_proof_keys`, `receipt_fingerprints` | proof reuse tests |
 | — | A transfer whose outcome is unknown counts against the request, so a new agent run cannot pay it twice | `engine/checks.py`, `engine/transfers.py` | `test_pending_transfer_cannot_be_paid_twice` |
 | — | Proof images are re-encoded before storage: no EXIF, GPS or other metadata reaches the agent | `proof_images.py` | `test_proof_images.py`, `TestNormalisation` |
 | — | A receipt is `photo` only if taken in our genuine iOS app on an App Attest-verified iPhone, unedited, for this request, within its ticket | `capture/` | `test_app_capture.py`, `test_capture_apple.py` |
@@ -290,8 +290,8 @@ iPhone photos as JPEG, not HEIC; at least 200 px), or plain text (stored as the 
 claim, never as evidence). Up to 15 MB as uploaded and 3 per request. The gateway applies
 the EXIF rotation, strips all metadata (GPS included) by re-encoding, limits the long edge to
 2,576 px and keeps the stored copy under 3.75 MB; the agent only sees that copy, and the
-original is kept encrypted. Flags set at upload: `duplicate` (same bytes as an earlier family
-proof), `near_duplicate` (perceptually the same picture), `no_camera_metadata`, `screenshot`,
+original is kept encrypted. Flags set at upload: `duplicate` (same bytes as an earlier proof from
+any of the guardian's dependents), `near_duplicate` (perceptually the same picture), `no_camera_metadata`, `screenshot`,
 `old_capture` (taken over 30 days ago), `edited` (editing software in the metadata) and
 `camera_signed` (verified capture). Flags only make the agent more careful. A plain upload is
 `source: "file"`; only a verified in-app capture (below) is `"photo"`.
@@ -436,7 +436,7 @@ named as in the agent contract (`amount`, `amount_requested`, `already_sent`).
 | Area | Tables |
 |---|---|
 | Identity and policy | `users`, `families`, `nonces`, `policies` (one active per family, enforced by a partial unique index) |
-| Requests | `requests`, `messages`, `proofs` (normalised copy, encrypted original, perceptual hash), `used_proof_keys`, `receipt_fingerprints` (keyed, shared by all families), `proof_requests` |
+| Requests | `requests`, `messages`, `proofs` (normalised copy, encrypted original, perceptual hash), `used_proof_keys` (per guardian), `receipt_fingerprints` (keyed, shared by all families), `proof_requests` |
 | Capture | `capture_devices` (attested phone keys, App Attest counters), `capture_tickets` |
 | Money | `transfers` (one per idempotency key; its id is the agent's `decision_id`), `auditor_verdicts`, `budget_counters` |
 | Guardian and agent | `policy_interviews`, `policy_interview_turns` (encrypted, append-only, `kind` on agent turns), `guardian_questions`, `policy_proposals`, `notifications`, `decisions`, `agent_events`, `llm_usage` |

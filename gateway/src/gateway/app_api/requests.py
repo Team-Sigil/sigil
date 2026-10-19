@@ -24,7 +24,7 @@ from gateway.contracts.app import Units
 from gateway.core.config import Settings
 from gateway.core.errors import ConflictError, DomainError, NotFoundError
 from gateway.db import audit_log
-from gateway.db.models import Decision, Message, Proof
+from gateway.db.models import Decision, Family, Message, Proof
 from gateway.db.models import Request as RequestRow
 from gateway.db.session import SessionDep
 from gateway.engine.transfers import parse_uuid
@@ -275,6 +275,10 @@ async def upload_proof(
         raise PayloadTooLargeError()
     now = datetime.now(UTC)
     family_id = dependent.family.id
+    # Earlier proofs from any of the guardian's dependents count as duplicates.
+    sibling_families = select(Family.id).where(
+        Family.guardian_user_id == dependent.family.guardian_user_id
+    )
 
     if (file.content_type or "").startswith("text/plain"):
         # Typed text is the dependent's claim, never evidence.
@@ -286,7 +290,7 @@ async def upload_proof(
             raise UnsupportedProofError()
         digest = hashlib.sha256(data).hexdigest()
         seen = await session.scalar(
-            select(Proof.id).where(Proof.family_id == family_id, Proof.sha256 == digest)
+            select(Proof.id).where(Proof.family_id.in_(sibling_families), Proof.sha256 == digest)
         )
         proof = Proof(
             request_id=row.id,
@@ -317,7 +321,7 @@ async def upload_proof(
         earlier = (
             await session.execute(
                 select(Proof.sha256, Proof.original_sha256, Proof.dhash).where(
-                    Proof.family_id == family_id
+                    Proof.family_id.in_(sibling_families)
                 )
             )
         ).all()
