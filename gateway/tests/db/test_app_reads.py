@@ -5,6 +5,7 @@ import pytest
 from fastapi import FastAPI
 
 from gateway.core.config import Settings
+from gateway.engine.transfers import TransferEngine
 from gateway.enums import Role
 from gateway.events import EventBus, EventType
 from gateway.main import create_app
@@ -26,8 +27,12 @@ class TestBudgetAndHistory:
     async def test_budget_reflects_sent_money_and_delegation(
         self, app_client: httpx.AsyncClient, world: World
     ) -> None:
+        # /budget reads the current week, so this transfer runs on the real clock.
+        engine = TransferEngine(
+            world.sessionmaker, world.crypto, agent_wallet=AGENT_WALLET, mint=MINT
+        )
         request = await world.add_request(10 * AUSD)
-        assert (await world.engine.submit(world.instruction(request))).status == "sent"
+        assert (await engine.submit(world.instruction(request))).status == "sent"
         budget = (
             await app_client.get(
                 "/api/v1/budget", headers=await login(app_client, world.dependent_key)

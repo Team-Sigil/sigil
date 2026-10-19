@@ -225,6 +225,9 @@ class TransferEngine:
                 status=TransferStatus.BLOCKED if reason else TransferStatus.PENDING,
                 reason=reason,
                 destination_token_account=None if reason else family.dependent_token_account,
+                # The engine's clock, not the database's: settling finds the reserved budget
+                # week from this timestamp.
+                created_at=now,
             )
             session.add(transfer)
             try:
