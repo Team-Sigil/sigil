@@ -371,7 +371,7 @@ Service `services/signer/`. Separate process and container; the **only** holder 
 
 On every `/v1/transfer` it MUST, in order:
 1. Verify HMAC, timestamp within ±30 s, nonce unused (store last 10 min) → else 401 `SIGNER_REJECTED`.
-2. Verify `destination_token_account` is the registered destination for `family_id`, read via `DATABASE_URL_READONLY` from the view `registered_destinations` → else `SIGNER_REJECTED`.
+2. Verify `destination_token_account` is the registered destination and `source_token_account` the registered source (the guardian's reservoir) for `family_id`, read via `DATABASE_URL_READONLY` from the view `registered_destinations` → else `SIGNER_REJECTED`.
 3. Verify `amount_units ≤ SIGNER_MAX_PER_TRANSFER_UNITS` and today's signed total + amount ≤ `SIGNER_MAX_PER_DAY_UNITS` → else `SIGNER_REJECTED`.
 4. Read on-chain delegation of `source_token_account`: delegate == agent wallet pubkey and `delegated_amount ≥ amount_units` → else `failed`/`INSUFFICIENT_DELEGATION`.
 5. Idempotency: same `idempotency_key` returns the stored result, never signs twice.
@@ -478,7 +478,7 @@ MOCK_CHAIN=false
 | `summaries` | id, family_id, week_start, content, created_at |
 | `audit_log` | id (bigserial), family_id, event_type, payload (jsonb), prev_hash, hash, created_at |
 
-`audit_log.hash = sha256(prev_hash || canonical_json({event_type, payload, created_at}))`. App DB role has INSERT/SELECT only on `audit_log` (no UPDATE/DELETE). View `registered_destinations` exposes only `families.dependent_token_account` to the signer's read-only role.
+`audit_log.hash = sha256(prev_hash || canonical_json({event_type, payload, created_at}))`. App DB role has INSERT/SELECT only on `audit_log` (no UPDATE/DELETE). View `registered_destinations` exposes only `families.id`, `dependent_token_account` and `guardian_token_account` to the signer's read-only role.
 
 Events written to `audit_log`: `policy_activated, policy_proposed, question_asked, question_answered, request_created, audit_verdict, decision, transfer_pending, transfer_confirmed, transfer_failed, freeze_changed, login`.
 
@@ -586,3 +586,4 @@ Mainnet, real fiat, KYC, multiple guardians, an Android app, push notifications,
 | 2026-10-18 | 1.0.1 | The client is a native mobile app, not a web app: §3 stack, §4 layout and ownership, §18, §19; receipts use verified in-app capture |
 | 2026-10-18 | 1.0.2 | The mobile app is iOS only: §3; Android is out of scope (§18) |
 | 2026-10-19 | 1.0.3 | A guardian may have several dependents (§17, §18); multiple guardians stay out of scope |
+| 2026-10-19 | 1.0.4 | The signer also checks the source token account; `registered_destinations` exposes it (§10, §14) |
