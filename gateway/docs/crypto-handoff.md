@@ -1,5 +1,8 @@
 # Crypto layer handoff
 
+> Written from [SPEC.md](../SPEC.md) and the [README](../README.md), which are the source of
+> truth. If this guide disagrees with them, they win.
+
 For Han, from the gateway (Julian). It describes everything the gateway expects from the
 crypto layer, so you can build it on your own. Gateway branch `feat/multi-dependent`.
 
@@ -33,7 +36,7 @@ iOS app ──▶ Gateway ──▶ Agent layer (decides what to do; untrusted)
 all of them draw on the guardian's one reservoir. So several `family_id`s can share one
 `source_token_account`, and transfers from the same source can reach you at the same time.
 
-**Your responsibilities (SPEC §10, SEC-03, SEC-07, SEC-13, SEC-14, SEC-15)**
+**Your responsibilities (SPEC §9; SEC-03, SEC-07, SEC-13, SEC-14, SEC-15)**
 
 1. Hold the agent wallet key: encrypted at rest, only in this service, never logged.
 2. Answer delegation reads (`GET /v1/delegation/{token_account}`).
@@ -42,7 +45,7 @@ all of them draw on the guardian's one reservoir. So several `family_id`s can sh
    reservoir, or beyond your own caps.
 4. Never sign the same transfer twice.
 5. Run on devnet only.
-6. Own `scripts/`: aUSD mint setup, demo seed, attack demos (SPEC §4).
+6. Own the devnet scripts: aUSD mint setup, demo seed, attack demos (SPEC §3).
 
 ## 2. Authentication on every request
 
@@ -218,7 +221,7 @@ the gateway's `.env`; ask Julian.
   to `AGENT_WALLET_PUBKEY`, and refuse to start if not.
 - Listen only on the internal network: the gateway is your only client. In docker-compose,
   don't publish the port beyond `127.0.0.1`.
-- `MOCK_CHAIN=true` (SPEC §10): skip steps 6 and 7 and return `tx_signature = "mock_" + uuid`.
+- `MOCK_CHAIN=true` (SPEC §9): skip steps 6 and 7 and return `tx_signature = "mock_" + uuid`.
   Useful before devnet works.
 
 | Variable | Purpose | Shared with the gateway? |
@@ -229,7 +232,7 @@ the gateway's `.env`; ask Julian.
 | `AGENT_WALLET_KEY_ENC`, `SIGNER_MASTER_KEY` | the encrypted key and its Fernet key | no, crypto layer only |
 | `SOLANA_RPC_URL` | `https://api.devnet.solana.com` (or another devnet RPC) | no |
 | `DATABASE_URL_READONLY` | section 5 | no |
-| `SIGNER_MAX_PER_TRANSFER_UNITS`, `SIGNER_MAX_PER_DAY_UNITS` | your caps (SPEC defaults: 200 and 300 aUSD) | no |
+| `SIGNER_MAX_PER_TRANSFER_UNITS`, `SIGNER_MAX_PER_DAY_UNITS` | your caps (suggested: 200 and 300 aUSD) | no |
 | `MOCK_CHAIN` | skip the chain | no |
 
 ## 7. Devnet setup (your `scripts/`)
@@ -260,7 +263,7 @@ switch it over:
 3. From your machine, Postgres is at `localhost:5432` (database `sigil`, user
    `sigil_signer_ro`).
 
-## 9. Tests to write (SPEC §15)
+## 9. Tests to write (SPEC §13)
 
 | Test | Proves |
 |---|---|

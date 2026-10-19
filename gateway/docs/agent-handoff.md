@@ -1,5 +1,8 @@
 # Agent layer handoff: several dependents per guardian
 
+> Written from [SPEC.md](../SPEC.md) and the [README](../README.md), which are the source of
+> truth. If this guide disagrees with them, they win.
+
 For Alwin, from the gateway (Julian). Gateway branch `feat/multi-dependent`; checked against
 agent-layer `main` at `ded5d75`.
 
@@ -11,7 +14,7 @@ note says what the gateway now guarantees, and proposes one optional contract ad
 
 - A guardian may have several dependents, one family each (own policy, weekly budget,
   freeze, questions, policy interview, history). A dependent still has exactly one guardian.
-  Multiple guardians stay out of scope (SPEC §17, §18).
+  Multiple guardians stay out of scope (SPEC §15, §16).
 - **One reservoir per guardian.** All of a guardian's dependents must use the same guardian
   token account, so there is one delegation per guardian. Registering a dependent with a
   different token account is refused.
@@ -31,7 +34,7 @@ note says what the gateway now guarantees, and proposes one optional contract ad
 | Guardrail `over_reservoir` uses `ctx.delegated_amount` | Same reservoir-wide figure as the engine uses | matches |
 | `Notification(audience="guardian", recipient_id=guardian_id)` | Stored as a guardian-wide note (`family_id` null in the app), pushed to every family's event stream | works; see proposal A |
 
-**Note 1, token budget.** `LLM_TOKEN_BUDGET_PER_FAMILY_PER_DAY` (default 200,000) is now
+**Note 1, token budget.** `LLM_TOKEN_BUDGET_PER_GUARDIAN_PER_DAY` (default 200,000) is now
 shared by all of a guardian's dependents, because the usage "family" is the guardian. If a
 guardian with three dependents runs out too early in the demo, we raise the default on our
 side; tell us if you'd rather have it per dependent.

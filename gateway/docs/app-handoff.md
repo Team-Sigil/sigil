@@ -1,7 +1,10 @@
 # App handoff: several dependents per guardian
 
+> Written from [SPEC.md](../SPEC.md) and the [README](../README.md), which are the source of
+> truth. If this guide disagrees with them, they win.
+
 For Shine, from the gateway (Julian). Gateway branch `feat/multi-dependent`. The full App API
-is in the README ("App API"); this note covers only what changed.
+is in the [README](../README.md) ("App API"); this note covers only what changed.
 
 **Short version:** a guardian can now add more dependents. Guardian screens about one
 dependent send an `X-Family-Id` header. **The dependent app does not change.** A guardian

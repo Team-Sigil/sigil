@@ -1,6 +1,6 @@
 # Coding Style Guide
 
-A concise guide for keeping code consistent, readable, and easy for both humans and coding agents to work with.
+A concise guide for keeping code consistent, readable, and easy for both humans and coding agents to work with. What to build is in [SPEC.md](SPEC.md); this file is only about how the code is written.
 
 ## 1. Keep Code Explicit
 
@@ -304,15 +304,12 @@ instead of:
 
 ## 12. Logging
 
-Use the project's configured logger instead of `print()`.
+Use a module logger (`logger = logging.getLogger(__name__)`) instead of `print()`. Logging is configured once in `core/logging.py`, which also redacts secrets.
 
-Log meaningful events and useful identifiers:
+Log meaningful events and useful identifiers, with `%s` arguments rather than f-strings:
 
 ```python
-logger.info(
-    "Submission verification completed",
-    submission_id=submission.id,
-)
+logger.info("Transfer %s confirmed", transfer.id)
 ```
 
 Use exception logging when a traceback is useful.
@@ -383,7 +380,7 @@ Consistency with the surrounding code is usually more valuable than introducing 
 When modifying the codebase, coding agents should:
 
 1. Read nearby files before making changes.
-2. Follow the repository layout in SPEC §4 and the existing naming style.
+2. Follow the layout in README "Layout" and the existing naming style.
 3. Reuse existing dependencies, schemas, helpers, and configuration.
 4. Keep Python names `snake_case`.
 5. Add useful type hints.

@@ -3,14 +3,18 @@
 The gateway layer of the Sigil platform: the **app API** that the guardian and dependent apps
 call, the **platform API** that the agent layer calls, the deterministic **policy engine**
 that is the only code allowed to move money, the **database** with its hash-chained audit
-log, and the signed client for the **crypto layer**. See
-[the system architecture](<System Architecture.md>).
+log, and the signed client for the **crypto layer**.
+
+This repo's docs are the single source of truth for the whole project: [SPEC.md](SPEC.md)
+for requirements and decisions (its §0 says where each fact lives),
+[docs/architecture.md](docs/architecture.md) for the design rationale, this README for the
+gateway's interfaces, and one guide per layer in [docs/](docs/).
 
 Sigil is four services that talk over HTTP:
 
 | Layer | Owner | What it does |
 |---|---|---|
-| App | Shine | Guardian and dependent web app, Phantom wallet, signing UX |
+| App | Shine | Native iOS app for guardians and dependents, Phantom wallet, signing UX |
 | Agent | Alwin | Maker agent, Auditor agent, scheduler ([agent-layer](https://github.com/Team-Sigil/agent-layer)) |
 | **Gateway (this repo)** | Julian | Everything between the other three, and the only place money decisions are made |
 | Crypto | Han | Signer holding the delegate key; signs `transfer_checked` on Solana devnet |
@@ -190,6 +194,7 @@ header; a guardian with one family may leave it out, and a guardian with several
 `400 FAMILY_REQUIRED` without it. A family the caller doesn't belong to is `404`. All of a
 guardian's dependents draw on one reservoir (one token account, one delegation), so a
 second dependent must be registered with the same `guardian_token_account` (else `409`).
+App guide: [docs/app-handoff.md](docs/app-handoff.md).
 
 | Method | Path | Who | Body → response |
 |---|---|---|---|
@@ -235,7 +240,8 @@ show it as "on its way", with no retry button.
 
 **Sign-in.** Get a nonce with `purpose: "login"`, have Phantom `signMessage` the returned
 `message` exactly, send it to `/auth/verify`. A nonce works once, for 5 minutes, for that
-wallet and purpose; a failed attempt burns it.
+wallet and purpose; a failed attempt burns it. Step-by-step guide with Phantom deeplinks:
+[docs/auth-guide.md](docs/auth-guide.md).
 
 **Policy interview.** The guardian sets up the policy by chatting with the agent (the agent
 layer's `policy-protocol.md`, `sigil.policy-interview/1`). Call `POST /policy/interview`
@@ -348,11 +354,11 @@ message, proof and answer calls.
 
 ## Platform API (for the agent layer)
 
-Exactly the contract in the agent layer's README ("Platform API contract") and
-`contracts.py`, served under `/agent/v1`. `contracts/agent.py` is a verbatim copy; a test
-compares its JSON schemas with the agent layer's whenever it is checked out next to this
-repo, and another drives the gateway with the agent layer's own `MakerAPI` and
-`AuditorAPI` over real HTTP.
+Served under `/agent/v1`. The shapes are `contracts/agent.py`, a verbatim copy of the agent
+layer's `contracts.py` (changes are agreed with Alwin and land in both repos). A test
+compares their JSON schemas whenever the agent layer is checked out next to this repo, and
+another drives the gateway with the agent layer's own `MakerAPI` and `AuditorAPI` over real
+HTTP. Agent layer guide: [docs/agent-handoff.md](docs/agent-handoff.md).
 
 | Method | Path | Token |
 |---|---|---|
@@ -362,6 +368,15 @@ repo, and another drives the gateway with the agent layer's own `MakerAPI` and
 | POST | `/guardian-questions`, `/proof-requests`, `/policy-proposals`, `/notifications` | maker |
 | POST | `/decisions`, `/events`, `/usage`, `/policy-drafts/validate` | maker |
 | POST | `/auditor/verdicts` | **Auditor only** |
+
+The gateway calls the agent layer's **inbound API** (`AGENT_URL`, `Authorization: Bearer
+$AGENT_INBOUND_TOKEN`):
+
+| Method | Path | When |
+|---|---|---|
+| POST | `/v1/requests/{request_id}/process` | A dependent's new request, message or proof, a guardian's answer, or `/process` retry; returns the decision |
+| POST | `/v1/policy-interviews/turn` | Each policy interview turn, with the whole stored conversation |
+| GET | `/v1/policy-interviews/protocol?locale=` | The interview's checklist and phases, for the app |
 
 Ids: a dependent is the dependent's user id, a guardian (and the agent's `family_id` for
 usage) is the guardian's user id; requests and proofs are their UUIDs. A guardian may have
@@ -405,7 +420,7 @@ stricter):
 ## Crypto layer contract (for Han)
 
 Defined here (`contracts/crypto.py`); `mock_crypto/` implements it in memory as a
-reference. Transfer shapes keep SPEC §8.5 exactly.
+reference. The crypto layer's full guide is [docs/crypto-handoff.md](docs/crypto-handoff.md).
 
 Every request carries `X-Timestamp` (unix seconds), `X-Nonce` (UUID) and `X-Signature` =
 hex HMAC-SHA256(`CRYPTO_HMAC_SECRET`, `{timestamp}.{nonce}.{raw_body}`), with an empty
@@ -425,10 +440,10 @@ the last 10 minutes, with `401 {"error_code": "SIGNER_REJECTED"}`.
 - **4xx** means "refused, nothing signed" (the gateway releases the reservation). **5xx or
   no answer** means "unknown" (it keeps the reservation and retries later). Return
   `failed` with an `error_code` for definite on-chain failures.
-- The signer should still run its own checks (SPEC §10): registered destination and source
+- The signer should still run its own checks: registered destination and source
   (the `registered_destinations` view: `family_id`, `dependent_token_account`,
   `guardian_token_account`, readable by `sigil_signer_ro` only), its own per-transfer and
-  per-day caps, delegation, devnet only. The full guide is `crypto-handoff.md`.
+  per-day caps, delegation, devnet only (SPEC §9).
 
 ## Data
 
@@ -475,6 +490,7 @@ src/gateway/
   views.py          DB rows as agent contract objects (history, proofs)
   db/               models, session, audit_log, migrations
 mock_crypto/        in-memory crypto layer (dev, tests, reference)
+docs/               architecture (design rationale), handoffs per layer, auth guide
 Dockerfile          one image for the gateway, its migrations and the mock crypto layer
 infra/postgres/     role setup for docker-compose
 tests/              unit tests; tests/db/ against PostgreSQL
@@ -559,11 +575,11 @@ pipeline cannot pass without checking the contract.
 | `AUSD_MINT`, `AGENT_WALLET_PUBKEY` | The token mint and the agent wallet (the delegate) |
 | `APPLE_APP_ID`, `APPLE_APP_ATTEST_PRODUCTION` | iOS app identity (`<Team ID>.<bundle id>`) and App Attest environment; iOS capture is off until set |
 | `CAMERA_ONLY_PROOFS` | Only verified captures count as proof; must match the agent layer's `AGENT_CAMERA_ONLY_PROOFS` |
-| `RATE_LIMIT_PER_MIN`, `LLM_TOKEN_BUDGET_PER_FAMILY_PER_DAY`, `DEPENDENT_MESSAGES_PER_DAY` | Limits |
+| `RATE_LIMIT_PER_MIN`, `LLM_TOKEN_BUDGET_PER_GUARDIAN_PER_DAY`, `DEPENDENT_MESSAGES_PER_DAY` | Limits |
 | `PENDING_RETRY_SECONDS` | How often transfers left pending by a crypto outage are retried (default 60) |
 | `GATEWAY_AGENT_URL`, `GATEWAY_CRYPTO_URL` | docker-compose only: where the gateway container finds the agent and crypto layers |
 
-Dependencies beyond SPEC §3: `pydantic-settings`, `psycopg` 3, `PyJWT`, `cryptography`,
+Dependencies beyond SPEC §4: `pydantic-settings`, `psycopg` 3, `PyJWT`, `cryptography`,
 `base58`, `python-multipart` (proof uploads), `cbor2` (App Attest), `pillow` (proof
 normalisation).
 
@@ -581,40 +597,6 @@ normalisation).
    receipt is still possible, as the agent layer's doc explains.
 4. **Agent calls are synchronous.** Request, message, proof and answer calls wait for the
    agent (up to minutes). A job queue would let the app return at once and rely on SSE.
-5. **The signer's read-only DB view** (`registered_destinations`, SPEC §10) exists, but
-   whether the crypto layer reads it or asks the gateway is open.
-6. **Policy proposals are listed, not adopted.** Adopting one means drafting and signing a
+5. **Policy proposals are listed, not adopted.** Adopting one means drafting and signing a
    new policy version; there is no one-click path yet.
-7. **SPEC.md predates the split into services.** Where it differs from the agent layer's
-   contract or this README (categories, field names, outcomes, the review rule), those win.
-   It was corrected for the mobile client (v1.0.1).
-
-## Agent layer handoff
-
-Status of the agent layer's `gateway-handoff.md` (reviewed at `6810508`):
-
-| # | Item | Status |
-|---|---|---|
-| 1 | Pending transfers can pay twice (P0) | Done: pending counts in check 10, `status: "pending"`, `already_pending`, retry job |
-| 2 | Re-copy the agent contract | Done (`b5e5d25`); parity tests pass |
-| 3 | Expose signed guardian overrides | Done: `guardian_approved_amount` |
-| 4 | Normalise proof images at upload | Done: Pillow re-encode, metadata stripped, 2,576 px, ≤ 3.75 MB, original kept encrypted |
-| 5 | Parity tests skip silently | Done: `AGENT_LAYER_SRC`, fail under `CI` |
-| 6 | More proof integrity flags | Done: `near_duplicate`, `screenshot`, `no_camera_metadata`, `old_capture`, `edited`, cross-family receipt fingerprint. Not done: C2PA (`ai_generated`), classifiers |
-| 7 | Verified in-app capture and camera-only | Done for iOS (App Attest); Android is out of scope |
-| 8 | Daily request quota per dependent | Done: `DEPENDENT_MESSAGES_PER_DAY`, `429 DAILY_LIMIT_REACHED` |
-| 9 | Auditor read access to context | Done: the Auditor's token may read context |
-| 10 | Link decisions to transfers | Done gateway-side: `decisions.transfer_id`, no contract change |
-| 11 | Policy interview | Done: `/api/v1/policy/interview` stores the conversation and kinds, the app can't submit agent turns, `ready` feeds the signing flow. The one-shot `POST /api/v1/policy/drafts` is removed |
-
-## Questions for the other layers
-
-- **Han:** is the crypto contract above workable (the `owner` field, 4xx vs 5xx semantics,
-  idempotency on the key)? Will the signer read `registered_destinations` or should the
-  gateway expose an endpoint for it?
-- **Alwin:** all ten items of `gateway-handoff.md` are addressed (see "Agent layer handoff"
-  below); please re-run your alignment tests against the gateway.
-- **Shine:** SSE needs header-based auth (the token in the `Authorization` header, never the
-  URL); agent-backed calls need ≥ 3-minute timeouts; signed texts must match the templates
-  byte for byte. For receipts: the App Attest enrolment and the signed capture claim above,
-  with no gallery picker.
+6. **No CI pipeline yet.** Tests, lint and the secret scan SEC-18 asks for run locally only.

@@ -1,8 +1,11 @@
 # Sign-In With Solana (SIWS) for Sigil
 
+> Written from [SPEC.md](../SPEC.md) and the [README](../README.md), which are the source of
+> truth. If this guide disagrees with them, they win.
+
 How users sign in to the gateway with their Phantom wallet, and what each side needs to make
-it work. The App API reference is in the README ("App API"); the multi-dependent changes are
-in `app-handoff.md`.
+it work. The App API reference is in the [README](../README.md) ("App API"); the
+multi-dependent changes are in [app-handoff.md](app-handoff.md).
 
 ## How it works
 
@@ -55,14 +58,14 @@ Three settings in `.env`:
 | `SIWS_DOMAIN` | your app's domain, e.g. `sigil.app` | the first line of the message; must equal the host of the `app_url` the app gives Phantom (see below) |
 | `JWT_TTL_HOURS` | `12` or less | session length (capped at 12 by SEC-09) |
 
-`.env.example` still has `SIWS_DOMAIN=localhost:3000` from the web-app days. Set it to the
-domain you use as Phantom's `app_url`.
+Your own `.env` may still say `SIWS_DOMAIN=localhost:3000` from the web-app days; set it to
+the host of the `app_url` your app gives Phantom.
 
 Then start the stack (Postgres holds the nonces):
 
 ```fish
 docker compose up -d --build
-curl -s http://127.0.0.1:8000/health
+curl -s http://127.0.0.1:8000/healthz
 ```
 
 **Test it without a phone.** This script stands in for Phantom with a throwaway key:
@@ -90,8 +93,7 @@ Save it as a file and run it with `uv run python <file>` from the repo.
 
 **Use Phantom's `signMessage`, not `signIn`.** Phantom's `signIn` builds its own message,
 with extra fields and formatting that won't match the gateway's text, so verification fails.
-Have Phantom sign the gateway's `message` byte for byte. (SPEC lists `signIn` first; the
-gateway as built requires `signMessage`.)
+Have Phantom sign the gateway's `message` byte for byte (SPEC §15).
 
 A native iOS app talks to Phantom through **Phantom's deeplinks**: Phantom opens, the user
 approves, and Phantom redirects back to your app with an encrypted reply. These steps follow
