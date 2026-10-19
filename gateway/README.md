@@ -425,8 +425,10 @@ the last 10 minutes, with `401 {"error_code": "SIGNER_REJECTED"}`.
 - **4xx** means "refused, nothing signed" (the gateway releases the reservation). **5xx or
   no answer** means "unknown" (it keeps the reservation and retries later). Return
   `failed` with an `error_code` for definite on-chain failures.
-- The signer should still run its own checks (SPEC §10): registered destination, its own
-  per-transfer and per-day caps, delegation, devnet only.
+- The signer should still run its own checks (SPEC §10): registered destination and source
+  (the `registered_destinations` view: `family_id`, `dependent_token_account`,
+  `guardian_token_account`, readable by `sigil_signer_ro` only), its own per-transfer and
+  per-day caps, delegation, devnet only. The full guide is `crypto-handoff.md`.
 
 ## Data
 
