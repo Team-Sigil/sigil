@@ -6,7 +6,7 @@
 > invent: use the decision in §15, or add an entry there and ask a human.
 
 - Project: FinTechathon 2026 entry (theme: AI as a Financial Participant)
-- Version: 2.3 (see §19)
+- Version: 2.3.1 (see §19)
 - Security weighs 30% of judging. Requirements tagged `SEC-xx` (§13) are non-negotiable.
 
 ---
@@ -418,7 +418,7 @@ The gateway owns the database (tables: README "Data").
 |---|---|---|---|
 | SEC-01 | LLM output never selects a recipient; no tool or platform payload has an address field | agent, gateway | gateway tested |
 | SEC-02 | Every transfer passes the policy engine; no other code path calls the signer | gateway | tested |
-| SEC-03 | The signer independently checks HMAC, registered destination **and source**, its own caps and the delegation | crypto | to build |
+| SEC-03 | The signer independently checks HMAC, registered destination **and source**, its own caps and the delegation | crypto | tested (sigil-crypto) |
 | SEC-04 | A policy is enforced only with the guardian's signature over its hash and version | gateway | tested |
 | SEC-05 | Guardian approvals and overrides only via verified signature; chat claims ignored | gateway, agent | gateway tested |
 | SEC-06 | A required Auditor verdict must exist before clearing; only the Auditor can post one | gateway, agent | gateway tested |
@@ -428,8 +428,8 @@ The gateway owns the database (tables: README "Data").
 | SEC-10 | Role and family checks on every route; dependents can't read guidance or other families | gateway | tested |
 | SEC-11 | Rate limits, request size limits, daily dependent message quota, per-guardian LLM token budget | gateway, agent | gateway tested |
 | SEC-12 | Untrusted input delimited in prompts; injection in a proof can't exceed limits | agent | agent layer |
-| SEC-13 | Delegate key encrypted at rest, only in the signer, never logged | crypto | to build |
-| SEC-14 | The signer refuses a non-devnet RPC | crypto | to build |
+| SEC-13 | Delegate key encrypted at rest, only in the signer, never logged | crypto | tested (sigil-crypto) |
+| SEC-14 | The signer refuses a non-devnet RPC | crypto | tested (sigil-crypto) |
 | SEC-15 | Chats and proofs encrypted at rest; no personal data in on-chain memos | gateway, crypto | gateway tested |
 | SEC-16 | Append-only, hash-chained audit log that verifies end to end | gateway | tested |
 | SEC-17 | A signed freeze blocks all of the family's transfers immediately | gateway | tested |
@@ -550,3 +550,4 @@ or address fields; the commit or PR says which sections it implements.
 | 2026-10-19 | 2.1 | Proof comes after payment: a request at or above `proof_threshold` is sent first and owes a receipt, which blocks further requests until settled; PDF receipts accepted for online orders (not yet checked) |
 | 2026-10-19 | 2.2 | PDF receipts from online orders are accepted only when the shop's signature over the file verifies; an unsigned PDF is stored but never reaches the model |
 | 2026-10-19 | 2.3 | Agent contract: `Notification.dependent_id` (a guardian note about one dependent, filed under that family) and the PDF flags `issuer_signed` / `unchecked_document`. A PDF's signer must match an allowed shop name exactly (default `LAZADA EXPRESS COMPANY LIMITED`, checked against a real receipt) and its certificate must be meant for signing; BER-encoded signatures are no longer broken by padding removal |
+| 2026-10-19 | 2.3.1 | SEC-03, SEC-13 and SEC-14 marked tested: implemented and covered by tests in `sigil-crypto` |
