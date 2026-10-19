@@ -75,6 +75,26 @@ startup).
 `./sigil up` always rebuilds from the working tree, so local changes in any folder are picked
 up.
 
+## Logs
+
+Every service writes one line per event, in one format:
+
+```
+2026-10-19T18:04:08.981Z INFO uvicorn.access 172.18.0.1:54052 - "POST /api/v1/requests HTTP/1.1" 200
+2026-10-19T18:04:09.412Z WARNING agent_layer.flows.policy_interview interview turn unavailable: LLMUnavailable: OpenRouter answered 402: …
+```
+
+UTC time, level, logger, message. Docker's health checks (`GET /healthz`, every 30 s once a
+service is up) are not logged, and the services replace their tokens and keys before writing.
+When the agent can't do its job (the model provider refuses, the gateway's answer is outside
+the contract) it logs a `WARNING` with the reason, while the app only sees "unavailable".
+
+```sh
+./sigil logs -f                        # everything, live
+./sigil logs --since 30m agent         # one service, recent
+./sigil logs agent gateway | grep -E "WARNING|ERROR"
+```
+
 ## Tests
 
 Each layer is its own Python package (Python ≥ 3.12) with its own tests. Run them from the

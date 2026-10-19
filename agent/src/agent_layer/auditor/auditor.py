@@ -14,6 +14,7 @@ transfer (idempotency key + amount + category).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -34,6 +35,8 @@ from agent_layer.llm import LLM, LLMUnavailable
 from agent_layer.maker.context import dependent_name, guidance_block, history_lines
 from agent_layer.money import to_display
 from agent_layer.platform_api import AuditorAPI, PlatformAPIError
+
+logger = logging.getLogger(__name__)
 
 
 class ContextConflict(Exception):
@@ -187,6 +190,7 @@ class Auditor:
             )
         except (LLMUnavailable, BudgetExhausted, PlatformAPIError) as exc:
             log.add("auditor_fail_closed", type(exc).__name__)
+            logger.warning("Auditor failed closed (flag): %s: %s", type(exc).__name__, exc)
             verdict = _flag("The Auditor could not complete its review, so the guardian should decide.")
 
         # Persuasion guard: an independent "concerned" view that flips to "agree" after

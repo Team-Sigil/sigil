@@ -16,6 +16,7 @@ ends in a safe fallback: no further money moves and the guardian is asked.
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -55,6 +56,8 @@ from agent_layer.maker.prompts import ALLOWANCE_INSTRUCTION, MAKER_SYSTEM
 from agent_layer.maker.tools import tool_definitions
 from agent_layer.money import to_base, to_display
 from agent_layer.platform_api import MakerAPI, PlatformAPIError
+
+logger = logging.getLogger(__name__)
 
 FINISH_NUDGE = "Please call the finish tool now to end this request."
 # A model call needs at least this long; with less time left, the run stops.
@@ -199,8 +202,10 @@ class MakerAgent:
             self._loop(run)
         except (LLMUnavailable, BudgetExhausted) as exc:
             run.log.add("safe_fallback", type(exc).__name__)
+            logger.warning("%s run fell back to the guardian: %s: %s", run.mode, type(exc).__name__, exc)
         except PlatformAPIError as exc:
             run.log.add("safe_fallback", f"platform error {exc.status}")
+            logger.warning("%s run fell back to the guardian: %s", run.mode, exc)
         if run.finish is None:
             self._fallback_to_guardian(run)
         return self._conclude(run)

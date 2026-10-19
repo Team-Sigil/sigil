@@ -23,4 +23,6 @@ if __name__ == "__main__":
         sys.exit(f"signer refused to start: invalid settings: {fields}")
     except AgentKeyError as exc:
         sys.exit(f"signer refused to start: {exc}")
-    uvicorn.run(app, host=settings.signer_host, port=settings.signer_port, workers=1)
+    uvicorn.run(
+        app, host=settings.signer_host, port=settings.signer_port, workers=1, log_config=None
+    )

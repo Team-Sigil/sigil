@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 from agent_layer.config import Settings
+from agent_layer.log_setup import configure_logging, secret_values
 from agent_layer.sandbox import install_sandbox
 from agent_layer.scheduler import build_scheduler
 from agent_layer.service import build_runtime, create_app
@@ -32,6 +33,7 @@ def allowed_hosts(settings: Settings) -> list[str]:
 
 def main() -> None:
     settings = Settings.from_env()
+    configure_logging(secret_values(settings, os.environ.get("ANTHROPIC_API_KEY", "")))
     install_sandbox(allowed_hosts=allowed_hosts(settings), allow_listen=True)
 
     runtime = build_runtime(settings)
@@ -48,7 +50,7 @@ def main() -> None:
             scheduler.shutdown(wait=False)
 
     app.router.lifespan_context = lifespan
-    uvicorn.run(app, host=os.environ.get("AGENT_HOST", "127.0.0.1"), port=int(os.environ.get("AGENT_PORT", "8100")))
+    uvicorn.run(app, host=os.environ.get("AGENT_HOST", "127.0.0.1"), port=int(os.environ.get("AGENT_PORT", "8100")), log_config=None)
 
 
 if __name__ == "__main__":

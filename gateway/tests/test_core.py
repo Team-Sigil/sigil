@@ -1,4 +1,5 @@
 import logging
+import re
 
 import base58
 import pytest
@@ -11,7 +12,12 @@ from pydantic import BaseModel, ValidationError
 from gateway.core import crypto
 from gateway.core.config import Settings
 from gateway.core.errors import DomainError, install_error_handlers
-from gateway.core.logging import REDACTED, RedactSecretsFilter
+from gateway.core.logging import (
+    REDACTED,
+    DropHealthChecksFilter,
+    RedactSecretsFilter,
+    configure_logging,
+)
 
 
 def test_canonical_json_sorts_keys_and_strips_whitespace() -> None:
@@ -74,6 +80,35 @@ def test_log_filter_redacts_secrets() -> None:
     record = logging.LogRecord("t", logging.INFO, "f", 1, "key=%s", ("s3cret-value",), None)
     RedactSecretsFilter(["s3cret-value"]).filter(record)
     assert record.getMessage() == f"key={REDACTED}"
+
+
+def _access_record(path: str) -> logging.LogRecord:
+    args = ("172.18.0.1:50000", "GET", path, "1.1", 200)
+    return logging.LogRecord(
+        "uvicorn.access", logging.INFO, "f", 1, '%s - "%s %s HTTP/%s" %d', args, None
+    )
+
+
+def test_log_filter_drops_only_health_checks() -> None:
+    drop = DropHealthChecksFilter()
+    assert drop.filter(_access_record("/healthz")) is False
+    assert drop.filter(_access_record("/api/v1/requests")) is True
+    other = logging.LogRecord(
+        "gateway", logging.INFO, "f", 1, "%s %s %s", ("a", "b", "/healthz"), None
+    )
+    assert drop.filter(other) is True
+
+
+def test_log_lines_carry_a_utc_timestamp() -> None:
+    root = logging.getLogger()
+    saved = root.handlers, root.level
+    try:
+        configure_logging([])
+        line = root.handlers[0].format(_access_record("/api/v1/requests"))
+    finally:
+        root.handlers, root.level = saved
+    assert re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z INFO uvicorn\.access ", line)
+    assert line.endswith('"GET /api/v1/requests HTTP/1.1" 200')
 
 
 class _Body(BaseModel):

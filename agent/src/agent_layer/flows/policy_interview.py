@@ -21,6 +21,7 @@ Protocol ``sigil.policy-interview/1`` (see policy-protocol.md):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
@@ -44,6 +45,8 @@ from agent_layer.i18n import (
 )
 from agent_layer.llm import LLM, LLMUnavailable
 from agent_layer.platform_api import ID_PATTERN, MakerAPI
+
+logger = logging.getLogger(__name__)
 
 PROTOCOL = "sigil.policy-interview/1"
 MAX_QUESTIONS_PER_TURN = 2
@@ -311,6 +314,7 @@ def interview_turn(
             ]
     except (LLMUnavailable, BudgetExhausted) as exc:
         log.add("interview_unavailable", type(exc).__name__)
+        logger.warning("interview turn unavailable: %s: %s", type(exc).__name__, exc)
         return turn("unavailable", "gathering", empty)
 
     assert assessment is not None

@@ -8,6 +8,7 @@ dedupe key, so a restarted job never sends anything twice.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter, defaultdict
 from datetime import date, timedelta
 
@@ -39,6 +40,8 @@ from agent_layer.i18n import (
 from agent_layer.llm import LLM, LLMUnavailable
 from agent_layer.money import to_display
 from agent_layer.platform_api import MakerAPI
+
+logger = logging.getLogger(__name__)
 
 PACE_MARGIN = 0.25
 RESERVOIR_MIN_WEEKS = 2.0
@@ -204,7 +207,8 @@ def weekly_summary(llm: LLM, api: MakerAPI, dependent_id: str, today: date, limi
         )
         budget.record(out.response)
         written = out.parsed.summary if out.parsed and out.response.stop_reason != "refusal" else None
-    except (LLMUnavailable, BudgetExhausted):
+    except (LLMUnavailable, BudgetExhausted) as exc:
+        logger.warning("weekly summary wording unavailable, using the fixed text: %s: %s", type(exc).__name__, exc)
         written = None
     if written is not None:
         written = screen_text(written, guidance="", max_chars=limits.max_summary_chars, log=log)

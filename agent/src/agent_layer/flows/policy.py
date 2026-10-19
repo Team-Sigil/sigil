@@ -7,6 +7,7 @@ code nor the model can activate a policy.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
@@ -19,6 +20,8 @@ from agent_layer.guardrails.events import GuardrailLog
 from agent_layer.guardrails.input import sanitize, wrap_untrusted
 from agent_layer.llm import LLM, LLMUnavailable
 from agent_layer.platform_api import MakerAPI
+
+logger = logging.getLogger(__name__)
 
 POLICY_SYSTEM = """\
 You help a guardian set up a weekly allowance for their dependent. From the
@@ -94,8 +97,9 @@ def draft_policy(
         budget.ensure_available()
         try:
             out = llm.parse(system=POLICY_SYSTEM, messages=messages, output_format=PolicyDraft)
-        except LLMUnavailable:
+        except LLMUnavailable as exc:
             log.add("draft_unavailable")
+            logger.warning("policy draft unavailable: %s", exc)
             return DraftResult(None, PolicyDraftValidation(valid=False, errors=["model unavailable"]), log.events)
         budget.record(out.response)
         draft = out.parsed

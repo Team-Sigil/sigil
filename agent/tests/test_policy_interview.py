@@ -3,6 +3,8 @@ and the inbound endpoints the gateway calls."""
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -169,6 +171,13 @@ def test_the_engine_validates_the_draft(platform, maker_api):
 def test_model_outage_is_reported_not_raised(platform, maker_api):
     result, _ = run(maker_api, [g("100 a week")], LLMUnavailable("down"))
     assert result.status == "unavailable" and result.question is None
+
+
+def test_model_outage_is_logged_with_its_reason(platform, maker_api, caplog):
+    """The app only sees "unavailable"; the operator needs to know why."""
+    with caplog.at_level(logging.WARNING, logger="agent_layer"):
+        run(maker_api, [g("100 a week")], LLMUnavailable("OpenRouter answered 402: insufficient credits"))
+    assert "interview turn unavailable: LLMUnavailable: OpenRouter answered 402" in caplog.text
 
 
 def test_chinese_guardian_gets_chinese_templates(platform, maker_api):

@@ -7,6 +7,7 @@ here touches a database or the filesystem.
 from __future__ import annotations
 
 import hmac
+import logging
 from dataclasses import dataclass
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -23,6 +24,8 @@ from agent_layer.llm_openrouter import OpenRouterLLM
 from agent_layer.maker.agent import MakerAgent
 from agent_layer.platform_api import AuditorAPI, MakerAPI, PlatformAPIError, ID_PATTERN
 from agent_layer.scheduler import Jobs
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -95,6 +98,7 @@ def create_app(runtime: AgentRuntime) -> FastAPI:
         try:
             return runtime.maker.handle_request(request_id)
         except PlatformAPIError as exc:
+            logger.warning("request %s: platform API error: %s", request_id, exc)
             raise HTTPException(status_code=502, detail="platform API unavailable") from exc
 
     @app.post("/v1/policy-drafts", dependencies=[Depends(authorize)])
@@ -109,6 +113,7 @@ def create_app(runtime: AgentRuntime) -> FastAPI:
                 limits=runtime.settings.limits,
             )
         except PlatformAPIError as exc:
+            logger.warning("policy draft: platform API error: %s", exc)
             raise HTTPException(status_code=502, detail="platform API unavailable") from exc
         return PolicyDraftResponse(draft=result.draft, validation=result.validation)
 
@@ -119,6 +124,7 @@ def create_app(runtime: AgentRuntime) -> FastAPI:
         try:
             return interview_turn(runtime.maker_llm, runtime.maker_api, body, limits=runtime.settings.limits)
         except PlatformAPIError as exc:
+            logger.warning("interview turn: platform API error: %s", exc)
             raise HTTPException(status_code=502, detail="platform API unavailable") from exc
 
     @app.get("/v1/policy-interviews/protocol", dependencies=[Depends(authorize)])
@@ -133,6 +139,7 @@ def create_app(runtime: AgentRuntime) -> FastAPI:
         try:
             job()
         except PlatformAPIError as exc:
+            logger.warning("job %s: platform API error: %s", name, exc)
             raise HTTPException(status_code=502, detail="platform API unavailable") from exc
         return {"ran": name}
 
