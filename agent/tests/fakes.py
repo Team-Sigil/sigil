@@ -57,9 +57,11 @@ class ScriptedLLM:
     are the parsed Pydantic object (or None). An Exception step is raised. A callable
     step receives the messages and returns one of the above."""
 
-    def __init__(self, steps: list[Step] | None = None, model: str = "scripted-model", supports_images: bool = True):
+    def __init__(self, steps: list[Step] | None = None, model: str = "scripted-model", supports_images: bool = True,
+                 supports_documents: bool = True):
         self.model = model
         self.supports_images = supports_images
+        self.supports_documents = supports_documents
         self.steps = list(steps or [])
         self.calls: list[dict[str, Any]] = []
 

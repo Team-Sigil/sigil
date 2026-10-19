@@ -218,7 +218,8 @@ def test_parse_reports_a_refusal():
 def _env(monkeypatch, **values):
     base = {"PLATFORM_API_URL": "http://platform", "PLATFORM_MAKER_TOKEN": "m", "PLATFORM_AUDITOR_TOKEN": "a"}
     for k in ("AGENT_LLM_PROVIDER", "AGENT_MAKER_PROVIDER", "AGENT_AUDITOR_PROVIDER", "AGENT_MAKER_MODEL",
-              "AGENT_AUDITOR_MODEL", "OPENROUTER_API_KEY", "AGENT_OPENROUTER_VISION"):
+              "AGENT_AUDITOR_MODEL", "OPENROUTER_API_KEY", "AGENT_OPENROUTER_VISION",
+              "AGENT_OPENROUTER_DOCUMENTS"):
         monkeypatch.delenv(k, raising=False)
     for k, v in {**base, **values}.items():
         monkeypatch.setenv(k, v)
@@ -266,3 +267,33 @@ def test_sandbox_allows_only_the_providers_in_use(monkeypatch):
     s = _env(monkeypatch, AGENT_LLM_PROVIDER="openrouter", OPENROUTER_API_KEY="sk-or")
     assert allowed_hosts(s) == ["platform", "openrouter.ai"]
     assert allowed_hosts(_env(monkeypatch)) == ["platform", "api.anthropic.com"]
+
+
+def test_pdfs_are_sent_only_to_a_model_that_reads_documents():
+    doc = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERg=="}}
+    turn = [{"role": "user", "content": [doc, {"type": "text", "text": "receipt"}]}]
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=_completion({"content": "ok"}))
+
+    llm = OpenRouterLLM(MODEL, api_key="k", documents=True, transport=httpx.MockTransport(handler))
+    llm.create(system="S", messages=turn, tools=[])
+    part = _body(seen[0])["messages"][1]["content"][0]
+    assert part == {"type": "file", "file": {"filename": "receipt.pdf",
+                                             "file_data": "data:application/pdf;base64,JVBERg=="}}
+
+    text_only, _ = _llm(_completion({"content": "ok"}))
+    assert text_only.supports_documents is False
+    with pytest.raises(LLMUnavailable, match="without document input"):
+        text_only.create(system="S", messages=turn, tools=[])
+
+
+def test_document_input_is_a_setting(monkeypatch):
+    s = _env(monkeypatch, AGENT_LLM_PROVIDER="openrouter", OPENROUTER_API_KEY="sk-or", AGENT_OPENROUTER_DOCUMENTS="1")
+    assert s.openrouter_documents is True
+    from agent_layer.service import build_llm
+
+    assert build_llm(s, "openrouter", MODEL, "high").supports_documents is True
+    assert build_llm(s, "anthropic", "claude-opus-5-5", "high").supports_documents is True

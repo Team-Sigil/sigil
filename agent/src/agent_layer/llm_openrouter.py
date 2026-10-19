@@ -6,8 +6,9 @@ translates both ways, so nothing above it changes when the provider does:
 
 * tool definitions → ``tools`` (functions); ``tool_use`` blocks ⇄ ``tool_calls``;
   ``tool_result`` blocks → ``tool`` messages;
-* image blocks → ``image_url`` data URIs, only when the model can see images (otherwise
-  the agents never send them; see ``supports_images``);
+* image blocks → ``image_url`` data URIs, and PDF document blocks → ``file`` parts, only
+  when the model can read them (otherwise the agents never send them; see
+  ``supports_images`` / ``supports_documents``);
 * ``parse`` asks for JSON matching the Pydantic schema (``response_format``), validates
   it, and gives the model one chance to repair invalid output;
 * effort → OpenRouter's ``reasoning.effort``; the reasoning text itself is not returned.
@@ -59,10 +60,12 @@ class OpenRouterLLM:
         effort: str = "high",
         max_tokens: int = 16_000,
         vision: bool = False,
+        documents: bool = False,
         transport: httpx.BaseTransport | None = None,
     ):
         self.model = model
         self.supports_images = vision
+        self.supports_documents = documents
         self._effort = _EFFORTS.get(effort, "high")
         self._max_tokens = max_tokens
         self._http = httpx.Client(
@@ -121,6 +124,14 @@ class OpenRouterLLM:
                 src = _get(b, "source", {})
                 url = f"data:{_get(src, 'media_type')};base64,{_get(src, 'data')}"
                 parts.append({"type": "image_url", "image_url": {"url": url}})
+            elif kind == "document":
+                if not self.supports_documents:
+                    raise LLMUnavailable("document sent to a model without document input")
+                src = _get(b, "source", {})
+                parts.append({"type": "file", "file": {
+                    "filename": "receipt.pdf",
+                    "file_data": f"data:{_get(src, 'media_type')};base64,{_get(src, 'data')}",
+                }})
         return tool_msgs + ([{"role": "user", "content": parts}] if parts else [])
 
     @staticmethod

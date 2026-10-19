@@ -88,6 +88,8 @@ class Settings:
     # Whether the OpenRouter model can read images. Off by default: the default model
     # (Nemotron 3 Super) is text-only, and a model that can't see a receipt mustn't vouch for it.
     openrouter_vision: bool = False
+    # Whether the OpenRouter model can read PDFs (signed shop receipts). Off by default.
+    openrouter_documents: bool = False
 
     @property
     def providers(self) -> set[Provider]:
@@ -118,6 +120,7 @@ class Settings:
             openrouter_api_key=openrouter_key,
             openrouter_base_url=os.environ.get("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1",
             openrouter_vision=_env_bool("AGENT_OPENROUTER_VISION", False),
+            openrouter_documents=_env_bool("AGENT_OPENROUTER_DOCUMENTS", False),
             maker_effort=os.environ.get("AGENT_MAKER_EFFORT", "high"),
             auditor_effort=os.environ.get("AGENT_AUDITOR_EFFORT", "high"),
             inbound_token=os.environ.get("AGENT_INBOUND_TOKEN", ""),

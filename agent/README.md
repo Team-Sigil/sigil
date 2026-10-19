@@ -193,7 +193,11 @@ sequenceDiagram
    typed, tampered and reused proofs, and the gateway flags near-duplicates and
    suspicious metadata, but a convincing fake from a new shop still gets through, up to
    `max_per_request`. See [proof-images.md](proof-images.md#proof-integrity).
-5. **The inbound API has no body size limit of its own.** Run the agent service only
+5. **Proof after payment isn't used yet.** The gateway can pay first and hold the
+   dependent's next requests until the receipt arrives, but the contract doesn't tell the
+   agent a receipt is owed or let it settle one, so the agent still asks for proof before
+   paying. Proposal and open decisions: [proof-after-payment.md](proof-after-payment.md).
+6. **The inbound API has no body size limit of its own.** Run the agent service only
    behind the gateway, which limits bodies and rates; don't expose it directly.
 
 ### Differences from the architecture doc
@@ -233,7 +237,7 @@ firewall, no DB credentials in the agent's environment).
 | Platform | A trusted channel that needed fixing (hidden characters, oversized, markup), or a proof whose bytes don't match its declared size, adds `platform_text_anomaly` and **forces an Auditor review** | `guardrails/input.py`, `maker/context.py` |
 | Tools | Allowlisted tools per mode; strict Pydantic arguments (`extra="forbid"`, so no recipient can be added); display amounts with max 2 decimals converted to integer base units | `guardrails/tools.py`, `contracts.py` |
 | Tools | Pre-checks before any API call: frozen, blocked category, per-request max, weekly budget, reservoir, **an amount stated in `amount_requested`** (never guessed from the chat), not more than requested (counting pending money), proof threshold, allowance ceiling (the signed amount: lowering is fine, raising needs the guardian). A signed guardian approval (`guardian_approved_amount`) lets exactly that amount past the per-request max and weekly cap without review, like the engine; nothing else is lifted | `guardrails/tools.py` |
-| Proofs | A proof counts toward the threshold only if it belongs to this request, its bytes match the platform's hash, it is an image or platform-extracted (`ocr`) text, and it isn't a duplicate or AI-generated (with `AGENT_CAMERA_ONLY_PROOFS`, it must also be a verified in-app capture). Above the threshold the model must report `proof_findings` (merchant, date, total, receipt number, matches claim); a mismatch or a total below the amount is refused. Platform flags (near-duplicate, screenshot, old, edited, AI-suspected, re-photographed screen) force an Auditor review | `maker/context.py`, `guardrails/tools.py` |
+| Proofs | A proof counts toward the threshold only if it belongs to this request, its bytes match the platform's hash, it is an image, platform-extracted (`ocr`) text, or a PDF receipt whose shop signature the platform verified (`issuer_signed`), and it isn't a duplicate, AI-generated or an unverified PDF (with `AGENT_CAMERA_ONLY_PROOFS`, it must also be a verified in-app capture). Above the threshold the model must report `proof_findings` (merchant, date, total, receipt number, matches claim); a mismatch or a total below the amount is refused. Platform flags (near-duplicate, screenshot, old, edited, AI-suspected, re-photographed screen) force an Auditor review | `maker/context.py`, `guardrails/tools.py` |
 | Tools | Per-run limits: 1 transfer, 1 guardian question, 10 tool calls, 8 model turns | `config.py` |
 | Tools | Idempotency key derived by code from request state (`req:{id}:{thread length}`, `allowance:{dep}:{iso week}`), never chosen by the model | `maker/agent.py` |
 | Auditor | Required when trusted triggers fire (amount ≥ review threshold, emergency, off-pattern amount, new category, allowance above usual) or agent triggers fire (low category confidence, injection signals) | `auditor/triggers.py` |
@@ -383,12 +387,14 @@ Both agents use Claude by default. Switch either or both to any OpenRouter model
 | `OPENROUTER_API_KEY` | Required when either agent uses OpenRouter | — |
 | `OPENROUTER_BASE_URL` | | `https://openrouter.ai/api/v1` |
 | `AGENT_OPENROUTER_VISION` | `1` if the OpenRouter model can read images | off |
+| `AGENT_OPENROUTER_DOCUMENTS` | `1` if the OpenRouter model can read PDFs (signed shop receipts) | off |
 | `AGENT_MAKER_EFFORT`, `AGENT_AUDITOR_EFFORT` | `low`…`max`; on OpenRouter, `reasoning.effort` (`xhigh`/`max` send `high`) | `high` |
 
 OpenRouter requests go only to providers that support every parameter sent (tools,
 structured output), and the sandbox allows only the hosts of the providers in use.
 
-**Text-only models and receipts.** Nemotron 3 Super can't read images. A model that can't
+**Text-only models and receipts.** Nemotron 3 Super can't read images or PDFs; the
+same rule applies to both. A model that can't
 see a receipt photo is never shown it and can't count it as proof: it's told an image
 was attached, and anything that needs proof goes to the guardian instead. Text proofs
 (OCR) still work. A text-only Auditor is told about images it can't see, and flags when

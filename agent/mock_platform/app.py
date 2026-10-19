@@ -52,11 +52,15 @@ def proof_digest(proof: Proof) -> str | None:
 
 
 def counts_as_proof(proof: Proof, *, camera_only: bool = False, origin: Proof | None = None) -> bool:
-    """An image, or text the platform extracted from one; never typed text, a duplicate
-    or an AI-generated image. With ``camera_only``, only a verified in-app capture
-    (``origin`` is the photo an ``ocr`` text was read from)."""
+    """An image, text the platform extracted from one, or a PDF receipt whose shop
+    signature verified; never typed text, a duplicate, an AI-generated image or an
+    unverified PDF. With ``camera_only``, images must be verified in-app captures
+    (``origin`` is the photo an ``ocr`` text was read from); signed PDFs are exempt."""
     if set(proof.flags) & PROOF_FLAGS_DISQUALIFYING or proof.source == "typed":
         return False
+    if proof.media_type == "application/pdf":
+        # Only a PDF whose shop signature verified, camera-only or not (no paper to photograph).
+        return "issuer_signed" in proof.flags
     is_image = proof.media_type.startswith("image/")
     if not (is_image or proof.source == "ocr"):
         return False

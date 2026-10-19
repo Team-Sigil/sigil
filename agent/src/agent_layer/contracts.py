@@ -169,8 +169,11 @@ class DependentRequest(_Lenient):
 ProofSource = Literal["photo", "file", "ocr", "typed"]
 # Integrity flags the platform may set at upload (see proof-images.md). Anything else
 # is ignored, so no free text from the platform reaches the prompt this way.
-PROOF_FLAGS_DISQUALIFYING = frozenset({"duplicate", "ai_generated"})  # never counts as proof
-PROOF_FLAGS_POSITIVE = frozenset({"camera_signed"})  # a valid C2PA camera signature: a note only
+# never counts as proof; "unchecked_document": a PDF whose shop signature didn't verify
+PROOF_FLAGS_DISQUALIFYING = frozenset({"duplicate", "ai_generated", "unchecked_document"})
+# a note only: "camera_signed", a valid camera signature; "issuer_signed", a PDF receipt
+# whose shop signature the platform verified (needed for a PDF to count at all)
+PROOF_FLAGS_POSITIVE = frozenset({"camera_signed", "issuer_signed"})
 PROOF_FLAGS = PROOF_FLAGS_DISQUALIFYING | PROOF_FLAGS_POSITIVE | frozenset({
     "near_duplicate", "screenshot", "no_camera_metadata", "old_capture", "edited",
     "ai_suspected", "rephotographed_screen",

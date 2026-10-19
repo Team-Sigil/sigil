@@ -6,9 +6,9 @@ Implementations: ``AnthropicLLM`` (Claude, below) and ``OpenRouterLLM``
 the same Anthropic-style messages and content blocks, so the agents don't know which one
 they're using. Tests use ``tests.fakes.ScriptedLLM``.
 
-``supports_images`` says whether the model can see images. When it can't, image proofs
-are shown to it as a note and never count as proof (``maker/context.py``), so a
-text-only model can't vouch for a receipt it never saw.
+``supports_images`` and ``supports_documents`` say whether the model can read images and
+PDFs. When it can't, those proofs are shown to it as a note and never count as proof
+(``maker/context.py``), so a model can't vouch for a receipt it never saw.
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ class ParsedResponse[P: BaseModel]:
 class LLM(Protocol):
     model: str
     supports_images: bool
+    supports_documents: bool
 
     def create(
         self, *, system: str, messages: list[dict], tools: list[dict], timeout: float | None = None
@@ -72,6 +73,7 @@ class AnthropicLLM:
     ):
         self.model = model
         self.supports_images = True
+        self.supports_documents = True  # PDF document blocks
         self._effort = effort
         self._max_tokens = max_tokens
         self._client = client or anthropic.Anthropic()

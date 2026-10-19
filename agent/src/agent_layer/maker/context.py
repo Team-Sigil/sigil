@@ -31,6 +31,7 @@ from agent_layer.money import to_display
 
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 TEXT_TYPES = {"text/plain"}
+DOCUMENT_TYPES = {"application/pdf"}
 
 
 @dataclass
@@ -39,6 +40,7 @@ class PreparedInput:
     case_text: str  # the untrusted request text, for the Auditor
     proof_texts: list[str] = field(default_factory=list)
     proof_images: list[dict] = field(default_factory=list)
+    proof_documents: list[dict] = field(default_factory=list)  # signed PDF receipts
     signals: list[str] = field(default_factory=list)
     proof_ids: list[str] = field(default_factory=list)  # proofs that count as proof
     proof_concerns: list[str] = field(default_factory=list)  # integrity concerns: force a review
@@ -102,6 +104,7 @@ def _taken_in_app(proof: Proof, is_image: bool, by_id: dict[str, Proof], request
 @dataclass
 class ProofView:
     images: list[dict] = field(default_factory=list)
+    documents: list[dict] = field(default_factory=list)  # signed PDFs, as document blocks
     texts: list[str] = field(default_factory=list)  # sanitised, one per shown text proof
     notes: list[str] = field(default_factory=list)  # code-written notes about the proofs
     signals: list[str] = field(default_factory=list)  # injection or tampering signals
@@ -110,14 +113,23 @@ class ProofView:
 
 
 def _proof_parts(
-    proofs: list[Proof], request: DependentRequest, limits: Limits, log: GuardrailLog, *, images_readable: bool = True
+    proofs: list[Proof],
+    request: DependentRequest,
+    limits: Limits,
+    log: GuardrailLog,
+    *,
+    images_readable: bool = True,
+    documents_readable: bool = True,
 ) -> ProofView:
     """Check each proof and decide whether it is shown, and whether it counts as proof.
 
-    It counts only if it belongs to this request, its bytes match the platform's hash,
-    it is an image or text the platform extracted from one (never typed), and it is not
-    a duplicate or AI-generated. With ``camera_only_proofs``, it must also be a verified
-    in-app capture (or text read from one). Everything else is shown as context at most.
+    It counts only if it belongs to this request, its bytes match the platform's hash, it
+    is evidence (an image, text the platform extracted from one, or a PDF whose shop
+    signature the platform verified; never typed text), and it isn't disqualified (a
+    duplicate, AI-generated, or an unverified PDF). With ``camera_only_proofs``, images
+    must also be verified in-app captures; signed PDFs are exempt, since an online order
+    has no paper to photograph. A proof the model can't read is never shown and never
+    counts. Everything else is shown as context at most.
     """
     view = ProofView()
     by_id = {p.id: p for p in proofs}
@@ -134,11 +146,25 @@ def _proof_parts(
         else:
             paired = True
 
+        flags = sorted(f for f in proof.flags if f in PROOF_FLAGS)
+        if len(flags) < len(proof.flags):
+            log.add("proof_flags_ignored", proof.id)
+
+        if proof.media_type in DOCUMENT_TYPES and (not proof.data_b64 or "unchecked_document" in flags):
+            # The platform couldn't verify the shop's signature, so it withholds the file.
+            log.add("proof_unchecked_document", proof.id)
+            view.notes.append(
+                "A PDF was attached, but its signature couldn't be verified, so you can't see it and it can't "
+                "be used as evidence. Ask the dependent to upload the original receipt PDF from their online "
+                "order, not a copy, screenshot or printout."
+            )
+            continue
+
         # The declared size is only a hint: the check is on the bytes actually received.
         if proof.size_bytes > limits.max_proof_bytes:
             log.add("proof_skipped", f"{proof.id} too large")
             continue
-        if proof.media_type in IMAGE_TYPES and proof.data_b64:
+        if proof.media_type in IMAGE_TYPES | DOCUMENT_TYPES and proof.data_b64:
             try:
                 raw = base64.b64decode(proof.data_b64, validate=True)
             except (binascii.Error, ValueError):
@@ -148,13 +174,18 @@ def _proof_parts(
                 log.add("proof_skipped", f"{proof.id} size mismatch (declared {proof.size_bytes}, got {len(raw)})")
                 view.signals.append(PLATFORM_ANOMALY_SIGNAL)
                 continue
-            is_image = True
+            kind = "image" if proof.media_type in IMAGE_TYPES else "document"
+            if kind == "document" and "issuer_signed" not in flags:
+                # Only a verified PDF should reach us with its content: anything else is a platform fault.
+                log.add("proof_skipped", f"{proof.id} PDF without a verified signature")
+                view.signals.append(PLATFORM_ANOMALY_SIGNAL)
+                continue
         elif proof.media_type in TEXT_TYPES and proof.text is not None:
             raw = proof.text.encode()
             if len(raw) > limits.max_proof_bytes:
                 log.add("proof_skipped", f"{proof.id} too large")
                 continue
-            is_image = False
+            kind = "text"
         else:
             log.add("proof_skipped", f"{proof.id} unsupported type {proof.media_type}")
             continue
@@ -163,28 +194,33 @@ def _proof_parts(
             view.signals.append(PLATFORM_ANOMALY_SIGNAL)
             continue
 
-        if is_image and not images_readable:
-            # A text-only model can't check a receipt it can't see, so it mustn't vouch for it.
+        if (kind == "image" and not images_readable) or (kind == "document" and not documents_readable):
+            # A model can't check a receipt it can't read, so it mustn't vouch for it.
             log.add("proof_unseen", proof.id)
+            what = "An image proof was attached, but you can't see images" if kind == "image" else (
+                "A PDF receipt was attached, but you can't read PDFs")
             view.notes.append(
-                "An image proof was attached, but you can't see images: don't describe or rely on it. It can't "
-                "be used as evidence, so anything that needs proof goes to the guardian."
+                f"{what}: don't describe or rely on it. It can't be used as evidence, so anything that needs "
+                "proof goes to the guardian."
             )
             continue
-        index = str(len(view.texts) if not is_image else len(view.images))
-        if is_image:
+        if kind == "image":
+            index = str(len(view.images))
             view.images.append(
                 {"type": "image", "source": {"type": "base64", "media_type": proof.media_type, "data": proof.data_b64}}
             )
+        elif kind == "document":
+            index = str(len(view.documents))
+            view.documents.append(
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                                "data": proof.data_b64}}
+            )
         else:
+            index = str(len(view.texts))
             s = sanitize(proof.text, max_chars=limits.max_proof_text_chars, log=log, source=label)
             view.texts.append(s.text)
             view.signals.extend(s.signals)
 
-        flags = sorted(f for f in proof.flags if f in PROOF_FLAGS)
-        if len(flags) < len(proof.flags):
-            log.add("proof_flags_ignored", proof.id)
-        kind = "image" if is_image else "text"
         concerns = [f for f in flags if f in PROOF_FLAGS_CONCERNS]
         if concerns:
             view.concerns.extend(f"proof_{f}" for f in concerns)
@@ -195,8 +231,17 @@ def _proof_parts(
                 f"Image proof {index} carries a valid camera signature: it shows where the photo was "
                 "taken, not that the receipt is genuine."
             )
-        typed = proof.source == "typed" or (not is_image and proof.source != "ocr")
-        camera_ok = _taken_in_app(proof, is_image, by_id, request) if limits.camera_only_proofs else True
+        signed_pdf = kind == "document"  # only signed PDFs get this far
+        if signed_pdf:
+            view.notes.append(
+                f"Document proof {index} is a PDF receipt signed by the shop: the platform verified it came from "
+                "the shop unchanged. It doesn't show who placed the order, so check it matches the request, and "
+                "put the order number in receipt_number."
+            )
+        typed = proof.source == "typed" or (kind == "text" and proof.source != "ocr")
+        camera_ok = (
+            signed_pdf or not limits.camera_only_proofs or _taken_in_app(proof, kind == "image", by_id, request)
+        )
         if typed:
             view.notes.append(
                 f"Text proof {index} was typed by the dependent, not extracted from a document: "
@@ -209,7 +254,7 @@ def _proof_parts(
             view.notes.append(
                 f"{kind.capitalize()} proof {index} wasn't taken with the app's camera, so it can't be used as evidence."
             )
-        elif is_image and proof.source == "photo":
+        elif kind == "image" and proof.source == "photo":
             view.notes.append(f"Image proof {index} was taken with the app's camera and verified.")
         if paired and not typed and camera_ok and not set(flags) & PROOF_FLAGS_DISQUALIFYING:
             view.qualifying_ids.append(proof.id)
@@ -224,6 +269,7 @@ def prepare_request_input(
     log: GuardrailLog,
     *,
     images_readable: bool = True,
+    documents_readable: bool = True,
 ) -> PreparedInput:
     pt = PlatformText(log)
     first = sanitize(request.message, max_chars=limits.max_message_chars, log=log, source="request")
@@ -255,14 +301,17 @@ def prepare_request_input(
                 "system_event", msg.text, max_chars=limits.max_event_chars, source="system_event",
             ))
 
-    pv = _proof_parts(proofs, request, limits, log, images_readable=images_readable)
-    images, texts = pv.images, pv.texts
+    pv = _proof_parts(proofs, request, limits, log, images_readable=images_readable,
+                      documents_readable=documents_readable)
+    images, documents, texts = pv.images, pv.documents, pv.texts
     signals.extend(pv.signals)
     proof_section = "\n".join(
         wrap_untrusted("untrusted_proof", t, index=str(i)) for i, t in enumerate(texts)
     )
     if images:
         proof_section += f"\n({len(images)} image proof(s) attached above.)"
+    if documents:
+        proof_section += f"\n({len(documents)} PDF receipt(s) attached above.)"
     if pv.notes:
         proof_section += "\n" + "\n".join(pv.notes)
         case_parts.append("Notes on the proof: " + " ".join(pv.notes))
@@ -298,10 +347,11 @@ def prepare_request_input(
         + f"{facts}{note}\n{language_instruction(dep_locale, guard_locale)}"
     )
     return PreparedInput(
-        content=[*images, {"type": "text", "text": text}],
+        content=[*images, *documents, {"type": "text", "text": text}],
         case_text="\n".join(case_parts),
         proof_texts=texts,
         proof_images=images,
+        proof_documents=documents,
         signals=unique_signals,
         proof_ids=pv.qualifying_ids,
         proof_concerns=sorted(set(pv.concerns)),

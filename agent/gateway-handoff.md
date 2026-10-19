@@ -2,6 +2,21 @@
 
 For Julian (gateway layer). This is everything the agent layer needs from the gateway.
 
+## Round 3 (2026-10-19): review of `58ea2d6`
+
+- **PDF receipts:** done on the agent side as your handoff describes (flags in the
+  contract, `document` blocks, `supports_documents` per model with
+  `AGENT_OPENROUTER_DOCUMENTS`, the Auditor, prompts, mock and tests). `receipt_number`
+  gets the order number.
+- **Gateway fixes**, made in `sigil-gateway`: the allowed-shop check is now an exact name
+  match (it was a substring, so "Not Lazada Ltd" passed); the signing certificate's key
+  usage and extended key usage must allow document signing; the docs now say validity is
+  checked at verification time, as the code does. `contracts/agent.py` has
+  `Notification.dependent_id` and the PDF flags, and guardian notes naming a dependent are
+  filed under that family (SPEC 2.3).
+- **Proof after payment:** a contract and behaviour proposal, with the decisions it needs,
+  is in [proof-after-payment.md](proof-after-payment.md).
+
 ## Round 2 (2026-10-19): review of `c569749`
 
 Items 1–11 below are done. We checked them in the code and ran your unit tests against

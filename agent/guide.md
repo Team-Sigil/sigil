@@ -75,6 +75,9 @@ What this means for your app:
   that no proof is silently ignored. If the agent runs on a text-only model (for example
   Nemotron on OpenRouter), receipt *photos* can't be checked: requests that need proof
   then go to the guardian (`asked_guardian`) instead of being sent.
+- **Online orders can send the shop's PDF receipt.** The platform verifies the shop's
+  signature; only a verified PDF reaches the agent and counts as proof. For an
+  unverified one, the agent asks the dependent for the original receipt PDF.
 - **A proof only counts for the request it was uploaded to, and only once.** Upload it
   to that request (the platform records `request_id`); the same receipt, or a new photo
   of it, can't back a second transfer. Text the dependent types is treated as their

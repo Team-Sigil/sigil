@@ -133,7 +133,8 @@ class MakerAgent:
             log.add("proofs_capped", str(len(request.proofs)))
         proofs = [self._api.get_proof(ref.id) for ref in refs]
         prepared = prepare_request_input(
-            ctx, request, proofs, self._limits, log, images_readable=self._llm.supports_images
+            ctx, request, proofs, self._limits, log, images_readable=self._llm.supports_images,
+            documents_readable=self._llm.supports_documents,
         )
         run = self._new_run(
             ctx,
@@ -343,6 +344,7 @@ class MakerAgent:
                     case_text=run.prepared.case_text,
                     proof_texts=run.prepared.proof_texts,
                     proof_images=run.prepared.proof_images,
+                    proof_documents=run.prepared.proof_documents,
                     amount=amount,
                     category=args.category,
                     purpose=args.purpose,

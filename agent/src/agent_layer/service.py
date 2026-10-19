@@ -40,6 +40,7 @@ def build_llm(settings: Settings, provider: Provider, model: str, effort: str) -
         return OpenRouterLLM(
             model, api_key=settings.openrouter_api_key, base_url=settings.openrouter_base_url,
             effort=effort, max_tokens=settings.max_tokens, vision=settings.openrouter_vision,
+            documents=settings.openrouter_documents,
         )
     return AnthropicLLM(model, effort=effort, max_tokens=settings.max_tokens)
 

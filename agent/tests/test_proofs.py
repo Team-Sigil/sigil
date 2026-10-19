@@ -421,3 +421,118 @@ def test_a_text_only_auditor_is_told_it_cant_see_the_images(platform, maker_api,
     assert [b["type"] for b in first] == ["text"]
     assert "1 image proof(s) were attached, but you can't see images" in first[0]["text"]
     assert "auditor_proof_unseen: 1" in record.guardrail_events
+
+
+# ---------------------------------------------------------- PDF receipts (online orders)
+
+PDF = b"%PDF-1.7\n% Lazada order 1234567 Office Mart calculator 30.00\n%%EOF\n"
+
+
+def _pdf(pid: str, *, signed: bool = True, data: bytes = PDF, **kw) -> Proof:
+    if not signed:  # the platform withholds an unverified PDF's content
+        return Proof(id=pid, media_type="application/pdf", size_bytes=len(data), flags=["unchecked_document"], **kw)
+    return Proof(id=pid, media_type="application/pdf", size_bytes=len(data), flags=["issuer_signed"],
+                 data_b64=base64.b64encode(data).decode(), **kw)
+
+
+ORDER = findings(30, "Lazada", receipt_number="1234567")
+
+
+def test_a_signed_pdf_is_read_and_counts(platform, make_agent, add_request):
+    add_request(amount=30, proofs=[_ref("p1", "application/pdf")])
+    platform.add_proof(_pdf("p1"))
+    agent, maker, auditor = _send_30(make_agent, proof=ORDER)
+    record = agent.handle_request("r1")
+    assert record.outcome is Outcome.SENT_FULL and platform.sent[0].proof_ids == ["p1"]
+    first = maker.calls[0]["messages"][0]["content"]
+    assert [b["type"] for b in first] == ["document", "text"]
+    assert first[0]["source"] == {"type": "base64", "media_type": "application/pdf",
+                                  "data": base64.b64encode(PDF).decode()}
+    assert "PDF receipt signed by the shop" in first[1]["text"]
+    assert [b["type"] for b in auditor.calls[0]["messages"][0]["content"]] == ["document", "text"]
+    assert platform.sent[0].proof_findings.receipt_number == "1234567"
+
+
+def test_an_unchecked_pdf_is_never_shown_and_never_counts(platform, make_agent, add_request):
+    add_request(amount=30, proofs=[_ref("p1", "application/pdf")])
+    platform.add_proof(_pdf("p1", signed=False))
+    agent, maker, _ = _send_30(make_agent, proof=ORDER)
+    record = agent.handle_request("r1")
+    assert platform.sent == []
+    assert [b["type"] for b in maker.calls[0]["messages"][0]["content"]] == ["text"]
+    assert "upload the original receipt PDF" in all_text(maker.calls[0]["messages"])
+    assert "proof_unchecked_document: p1" in record.guardrail_events
+    assert "proof_required" in " ".join(record.guardrail_events)
+
+
+@pytest.mark.parametrize("proof,event", [
+    (Proof(id="p1", media_type="application/pdf", size_bytes=len(PDF),
+           data_b64=base64.b64encode(PDF).decode()), "PDF without a verified signature"),  # content, no flag
+    (_pdf("p1").model_copy(update={"size_bytes": 3}), "size mismatch"),
+    (_pdf("p1", sha256="0" * 64), "hash mismatch"),
+])
+def test_a_pdf_that_doesnt_check_out_is_skipped(platform, make_agent, add_request, proof, event):
+    add_request(amount=30, proofs=[_ref("p1", "application/pdf")])
+    platform.add_proof(proof)
+    agent, maker, _ = _send_30(make_agent, proof=ORDER)
+    record = agent.handle_request("r1")
+    assert platform.sent == [] and any(event in e for e in record.guardrail_events)
+    assert [b["type"] for b in maker.calls[0]["messages"][0]["content"]] == ["text"]
+
+
+def test_a_model_that_cant_read_pdfs_never_relies_on_one(platform, maker_api, auditor_api, add_request):
+    from agent_layer.auditor.auditor import Auditor
+    from agent_layer.maker.agent import MakerAgent
+    from tests.fakes import ScriptedLLM
+
+    add_request(amount=30, proofs=[_ref("p1", "application/pdf")])
+    platform.add_proof(_pdf("p1"))
+    maker = ScriptedLLM([reply(transfer(30, proof=ORDER)), reply(finish("asked_guardian", "Asked."))],
+                        supports_documents=False)
+    record = MakerAgent(maker, maker_api, Auditor(ScriptedLLM([]), auditor_api)).handle_request("r1")
+    assert [b["type"] for b in maker.calls[0]["messages"][0]["content"]] == ["text"]
+    assert "you can't read PDFs" in all_text(maker.calls[0]["messages"])
+    assert "proof_unseen: p1" in record.guardrail_events and platform.sent == []
+
+
+def test_an_auditor_that_cant_read_pdfs_is_told(platform, maker_api, auditor_api, add_request):
+    from agent_layer.auditor.auditor import Auditor
+    from agent_layer.maker.agent import MakerAgent
+    from tests.fakes import ScriptedLLM
+
+    add_request(amount=30, proofs=[_ref("p1", "application/pdf")])
+    platform.add_proof(_pdf("p1"))
+    auditor = ScriptedLLM(list(AGREE), supports_documents=False)
+    maker = ScriptedLLM([reply(transfer(30, proof=ORDER)), reply(finish("sent_full", "Sent!"))])
+    record = MakerAgent(maker, maker_api, Auditor(auditor, auditor_api)).handle_request("r1")
+    first = auditor.calls[0]["messages"][0]["content"]
+    assert [b["type"] for b in first] == ["text"]
+    assert "1 PDF receipt(s) were attached, but you can't read PDFs" in first[0]["text"]
+    assert "auditor_document_unseen: 1" in record.guardrail_events
+
+
+def test_a_signed_pdf_counts_in_camera_only_mode(platform, make_agent, add_request):
+    add_request(amount=30, proofs=[_ref("p1", "application/pdf")])
+    platform.add_proof(_pdf("p1"))
+    agent, *_ = _camera_only(platform, make_agent, proof=ORDER)
+    assert agent.handle_request("r1").outcome is Outcome.SENT_FULL  # agent and engine agree
+
+
+def test_engine_refuses_an_unchecked_pdf(platform, base_url, add_request):
+    add_request(amount=30, proofs=[_ref("p1", "application/pdf")])
+    platform.add_proof(_pdf("p1", signed=False))
+    resp = _direct_transfer(base_url, "evil-pdf", proof_ids=["p1"],
+                            proof_findings={"merchant": "Lazada", "date": "d", "total": T(30), "matches_claim": True})
+    assert resp["reason"] == "proof required"
+
+
+def test_the_same_order_pdf_cannot_back_two_transfers(platform, make_agent, add_request):
+    add_request("r0", amount=30, proofs=[_ref("p0", "application/pdf")])
+    platform.add_proof(_pdf("p0"))
+    agent, *_ = _send_30(make_agent, proof=ORDER)
+    agent.handle_request("r0")
+    add_request("r1", amount=30, proofs=[_ref("p1", "application/pdf")])
+    platform.add_proof(_pdf("p1"))  # same bytes, same order
+    agent, *_ = _send_30(make_agent, proof=ORDER)
+    record = agent.handle_request("r1")
+    assert len(platform.sent) == 1 and "engine_blocked: proof already used" in record.guardrail_events

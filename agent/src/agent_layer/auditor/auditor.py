@@ -66,6 +66,7 @@ class ReviewCase:
     category_confidence: float
     idempotency_key: str
     triggers: list[str]
+    proof_documents: list[dict] = field(default_factory=list)  # signed PDF receipts, as document blocks
 
 
 @dataclass
@@ -136,14 +137,26 @@ class Auditor:
                 raise ContextConflict(conflict)
             budget.ensure_available()
             images = case.proof_images if self._llm.supports_images else []
+            documents = case.proof_documents if self._llm.supports_documents else []
             message = self._case_message(case, own, pt)
-            if case.proof_images and not images:
-                log.add("auditor_proof_unseen", str(len(case.proof_images)))
+            if documents:
                 message += (
-                    f"\n\n{len(case.proof_images)} image proof(s) were attached, but you can't see images. "
-                    "You can't confirm what they show: weigh that, and flag if the case depends on them."
+                    f"\n\n{len(documents)} PDF receipt(s) are attached, signed by the shop: the platform verified "
+                    "they came from the shop unchanged, not that the order is this dependent's."
                 )
-            content = [*images, {"type": "text", "text": message}]
+            for n, what, event in (
+                (len(case.proof_images) - len(images), "image proof(s) were attached, but you can't see images",
+                 "auditor_proof_unseen"),
+                (len(case.proof_documents) - len(documents), "PDF receipt(s) were attached, but you can't read PDFs",
+                 "auditor_document_unseen"),
+            ):
+                if n:
+                    log.add(event, str(n))
+                    message += (
+                        f"\n\n{n} {what}. You can't confirm what they show: weigh that, and flag if the case "
+                        "depends on them."
+                    )
+            content = [*images, *documents, {"type": "text", "text": message}]
             messages: list[dict] = [{"role": "user", "content": content}]
             first = self._llm.parse(
                 system=AUDITOR_SYSTEM, messages=messages, output_format=IndependentAssessment,
