@@ -81,6 +81,7 @@ def facts(**overrides: Any) -> TransferFacts:
         "destination_registered": True,
         "spent": 0,
         "reserved": 0,
+        "reservoir_reserved": 0,
         "delegated_remaining": 500 * AUSD,
         "expected_allowance_key": ALLOWANCE_KEY,
         "request": RequestFacts(
@@ -155,11 +156,12 @@ def test_first_failure_wins() -> None:
     assert check_transfer(everything_wrong) == "frozen by guardian"
 
 
-def test_reservations_count_against_delegation() -> None:
-    assert check_transfer(facts(reserved=5 * AUSD, delegated_remaining=12 * AUSD)) == (
+def test_reservoir_reservations_count_against_delegation() -> None:
+    """Pending money of any dependent on the same reservoir is not available to this one."""
+    assert check_transfer(facts(reservoir_reserved=5 * AUSD, delegated_remaining=12 * AUSD)) == (
         "insufficient delegation"
     )
-    assert check_transfer(facts(reserved=5 * AUSD, delegated_remaining=13 * AUSD)) is None
+    assert check_transfer(facts(reservoir_reserved=5 * AUSD, delegated_remaining=13 * AUSD)) is None
 
 
 def test_exactly_at_limits_clears() -> None:

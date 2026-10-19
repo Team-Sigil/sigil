@@ -64,11 +64,6 @@ class TestFamilies:
         )
         assert response.status_code == 401
 
-    async def test_second_family_is_refused(
-        self, app_client: httpx.AsyncClient, world: World
-    ) -> None:
-        assert (await self.register(app_client, world.guardian_key)).status_code == 409
-
     async def test_dependent_already_in_a_family_is_refused(
         self, app_client: httpx.AsyncClient, world: World
     ) -> None:

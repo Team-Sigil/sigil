@@ -45,7 +45,10 @@ class TransferFacts:
     policy_signature_valid: bool
     destination_registered: bool
     spent: int
-    reserved: int
+    reserved: int  # this family's pending money this week (weekly cap)
+    # Pending money of every family drawing on the same reservoir: a guardian's dependents
+    # share one token account and one delegation.
+    reservoir_reserved: int
     delegated_remaining: int | None  # 0 or None unless the delegate is the agent wallet
     expected_allowance_key: str
     request: RequestFacts | None = None
@@ -100,7 +103,10 @@ def check_transfer(facts: TransferFacts) -> str | None:
 
     if not override and facts.spent + facts.reserved + t.amount > policy.weekly_cap:
         return "over weekly cap"
-    if facts.delegated_remaining is None or t.amount > facts.delegated_remaining - facts.reserved:
+    if (
+        facts.delegated_remaining is None
+        or t.amount > facts.delegated_remaining - facts.reservoir_reserved
+    ):
         return "insufficient delegation"
 
     request = facts.request

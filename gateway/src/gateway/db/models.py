@@ -140,12 +140,14 @@ class User(Base):
 
 
 class Family(Base):
-    """One guardian and one dependent (MVP). The agent addresses them by user id."""
+    """One guardian and one of their dependents. A guardian may have several (one family per
+    dependent, each with its own policy, budget and freeze); a dependent has exactly one
+    guardian. The agent addresses them by user id."""
 
     __tablename__ = "families"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    guardian_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), unique=True)
+    guardian_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     dependent_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), unique=True)
     dependent_token_account: Mapped[str] = mapped_column(String(PUBKEY_LEN))
     guardian_token_account: Mapped[str] = mapped_column(String(PUBKEY_LEN))
@@ -521,7 +523,9 @@ class Notification(Base):
     __tablename__ = "notifications"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    family_id: Mapped[uuid.UUID] = family_fk()
+    # None for a guardian-wide note (the agent's notifications name only the recipient, and a
+    # guardian may have several dependents, e.g. "top up the shared reservoir").
+    family_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("families.id"), index=True)
     audience: Mapped[Audience] = mapped_column(str_enum(Audience, "audience"))
     recipient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     message: Mapped[str] = mapped_column(EncryptedText)
@@ -565,9 +569,12 @@ class AgentEvent(Base):
 
 
 class LlmUsage(Base):
+    """Tokens per guardian per day: the agent's usage "family" is the guardian, across all of
+    their dependents."""
+
     __tablename__ = "llm_usage"
 
-    family_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("families.id"), primary_key=True)
+    guardian_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     tokens_used: Mapped[int] = mapped_column(BigInteger, server_default="0")
 

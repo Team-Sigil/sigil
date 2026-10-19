@@ -2,6 +2,10 @@
 
 The token only proves who the caller is (`sub` = user id). Role and family are read from the
 database on every request, so a token never keeps a role or family the user no longer has.
+
+A guardian may have several dependents, one family each. Family-scoped routes act on the
+family named in the `X-Family-Id` header; a guardian with a single family may leave it out.
+A dependent always acts on their own (only) family.
 """
 
 import uuid
@@ -11,11 +15,11 @@ from typing import Annotated
 
 import jwt
 from fastapi import Depends, Header, Request
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import Settings
-from gateway.core.errors import ForbiddenError, UnauthorizedError
+from gateway.core.errors import DomainError, ForbiddenError, NotFoundError, UnauthorizedError
 from gateway.db.models import Family, User
 from gateway.db.session import SessionDep
 from gateway.enums import Role
@@ -23,11 +27,18 @@ from gateway.enums import Role
 JWT_ALGORITHM = "HS256"
 
 
+class FamilyRequiredError(DomainError):
+    code = "FAMILY_REQUIRED"
+    status = 400
+    message = "You support several dependents: say which one with the X-Family-Id header."
+
+
 @dataclass(frozen=True)
 class Principal:
     user: User
     role: Role
-    family: Family | None
+    families: list[Family]  # a guardian's, oldest first; a dependent's one family
+    family: Family | None  # the family this request acts on, if one is known
 
 
 @dataclass(frozen=True)
@@ -53,21 +64,39 @@ def create_token(
     return jwt.encode(claims, settings.jwt_secret.get_secret_value(), algorithm=JWT_ALGORITHM)
 
 
-async def resolve(session: AsyncSession, user: User) -> Principal:
+async def resolve(
+    session: AsyncSession, user: User, requested_family: str | None = None
+) -> Principal:
     """A wallet registered as a family's dependent is a dependent; every other wallet is a
-    guardian, with or without a family yet."""
-    family = await session.scalar(
-        select(Family).where(
-            or_(Family.guardian_user_id == user.id, Family.dependent_user_id == user.id)
+    guardian, with any number of families (one per dependent)."""
+    own = await session.scalar(select(Family).where(Family.dependent_user_id == user.id))
+    if own is not None:
+        if requested_family and requested_family != str(own.id):
+            raise NotFoundError("No such family.")
+        return Principal(user=user, role=Role.DEPENDENT, families=[own], family=own)
+
+    families = list(
+        await session.scalars(
+            select(Family)
+            .where(Family.guardian_user_id == user.id)
+            .order_by(Family.created_at, Family.id)
         )
     )
-    if family is not None and family.dependent_user_id == user.id:
-        return Principal(user=user, role=Role.DEPENDENT, family=family)
-    return Principal(user=user, role=Role.GUARDIAN, family=family)
+    if requested_family:
+        chosen = next((f for f in families if str(f.id) == requested_family), None)
+        if chosen is None:
+            # Another guardian's family looks exactly like one that doesn't exist.
+            raise NotFoundError("No such family.")
+    else:
+        chosen = families[0] if len(families) == 1 else None
+    return Principal(user=user, role=Role.GUARDIAN, families=families, family=chosen)
 
 
 async def current_principal(
-    request: Request, session: SessionDep, authorization: str = Header(default="")
+    request: Request,
+    session: SessionDep,
+    authorization: str = Header(default=""),
+    x_family_id: str | None = Header(default=None, max_length=64),
 ) -> Principal:
     settings: Settings = request.app.state.settings
     scheme, _, token = authorization.partition(" ")
@@ -86,7 +115,7 @@ async def current_principal(
     user = await session.scalar(select(User).where(User.id == user_id))
     if user is None:
         raise UnauthorizedError("Unknown user.")
-    return await resolve(session, user)
+    return await resolve(session, user, x_family_id)
 
 
 PrincipalDep = Annotated[Principal, Depends(current_principal)]
@@ -94,6 +123,8 @@ PrincipalDep = Annotated[Principal, Depends(current_principal)]
 
 def _member(principal: PrincipalDep) -> Member:
     if principal.family is None:
+        if principal.families:
+            raise FamilyRequiredError()
         raise ForbiddenError("Register a family first.")
     return Member(user=principal.user, role=principal.role, family=principal.family)
 

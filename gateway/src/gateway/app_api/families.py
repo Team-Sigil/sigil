@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app_api import nonces
@@ -28,7 +29,8 @@ class Me(BaseModel):
     user_id: str
     wallet: str
     role: Role
-    family_id: str | None
+    family_id: str | None  # the family this request acts on (see X-Family-Id), if known
+    family_ids: list[str]  # a guardian's families, one per dependent
     display_name: str | None
     locale: str | None
 
@@ -94,9 +96,16 @@ async def me(principal: PrincipalDep) -> Me:
         wallet=principal.user.wallet_address,
         role=principal.role,
         family_id=str(principal.family.id) if principal.family else None,
+        family_ids=[str(f.id) for f in principal.families],
         display_name=principal.user.display_name,
         locale=principal.user.locale,
     )
+
+
+@router.get("/families")
+async def list_families(principal: PrincipalDep, session: SessionDep) -> list[FamilyView]:
+    """A guardian's families, one per dependent (a dependent sees their own)."""
+    return [await family_view(session, family) for family in principal.families]
 
 
 @router.get("/family")
@@ -110,8 +119,7 @@ async def register_family(
 ) -> RegisteredFamily:
     settings: Settings = request.app.state.settings
     now = datetime.now(UTC)
-    if guardian.family is not None:
-        raise ConflictError("You already have a family.")
+    # A guardian may support several dependents; each dependent has exactly one guardian.
     if body.dependent_wallet == guardian.user.wallet_address:
         raise ConflictError("The dependent must use a different wallet.")
 
@@ -159,7 +167,12 @@ async def register_family(
         timezone=body.timezone,
     )
     session.add(family)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        # The same dependent registered concurrently: they can have only one guardian.
+        await session.rollback()
+        raise ConflictError("That wallet already belongs to a family.") from exc
     await audit_log.append(
         session,
         family.id,

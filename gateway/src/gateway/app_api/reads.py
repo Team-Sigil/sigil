@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from gateway.app_api.sessions import FamilyGuardianDep, MemberDep
+from gateway.app_api.sessions import FamilyGuardianDep, MemberDep, PrincipalDep
 from gateway.contracts.agent import HistoryItem
 from gateway.contracts.crypto import CryptoClient, CryptoUnavailableError
 from gateway.contracts.policy import PolicyBody
@@ -19,7 +19,12 @@ from gateway.core.errors import NotFoundError
 from gateway.db import audit_log
 from gateway.db.models import BudgetCounter, Notification, Policy, Transfer, User
 from gateway.db.session import SessionDep
-from gateway.engine.transfers import parse_uuid, usable_delegation, week_start
+from gateway.engine.transfers import (
+    parse_uuid,
+    reservoir_pending,
+    usable_delegation,
+    week_start,
+)
 from gateway.enums import PolicyStatus, TransferStatus
 from gateway.events import EventBus
 from gateway.views import load_history
@@ -59,6 +64,7 @@ class History(BaseModel):
 
 class NotificationView(BaseModel):
     id: str
+    family_id: str | None  # None: about all of a guardian's dependents (e.g. the reservoir)
     message: str
     created_at: datetime
     read_at: datetime | None
@@ -103,7 +109,9 @@ async def get_budget(member: MemberDep, request: Request, session: SessionDep) -
         usable = usable_delegation(
             delegation, settings.agent_wallet_pubkey, guardian.wallet_address
         )
-        delegated = max(0, usable - reserved)
+        # The reservoir is shared by all of the guardian's dependents.
+        pending = await reservoir_pending(session, family.guardian_token_account)
+        delegated = max(0, usable - pending)
     except CryptoUnavailableError:
         delegated = None
     return Budget(
@@ -145,39 +153,46 @@ async def get_history(member: MemberDep, session: SessionDep) -> History:
 
 
 @router.get("/notifications")
-async def list_notifications(member: MemberDep, session: SessionDep) -> list[NotificationView]:
+async def list_notifications(
+    principal: PrincipalDep, session: SessionDep
+) -> list[NotificationView]:
+    """All of the caller's notifications, across a guardian's dependents."""
     rows = await session.scalars(
         select(Notification)
-        .where(Notification.recipient_id == member.user.id)
+        .where(Notification.recipient_id == principal.user.id)
         .order_by(Notification.created_at.desc())
         .limit(LIST_LIMIT)
     )
-    return [
-        NotificationView(
-            id=str(n.id), message=n.message, created_at=n.created_at, read_at=n.read_at
-        )
-        for n in rows
-    ]
+    return [notification_view(n) for n in rows]
 
 
 @router.post("/notifications/{notification_id}/read")
 async def mark_read(
-    notification_id: str, member: MemberDep, session: SessionDep
+    notification_id: str, principal: PrincipalDep, session: SessionDep
 ) -> NotificationView:
     notification_uuid = parse_uuid(notification_id)
     row = None
     if notification_uuid is not None:
         row = await session.scalar(
             select(Notification).where(
-                Notification.id == notification_uuid, Notification.recipient_id == member.user.id
+                Notification.id == notification_uuid,
+                Notification.recipient_id == principal.user.id,
             )
         )
     if row is None:
         raise NotFoundError("No such notification.")
     row.read_at = row.read_at or datetime.now(UTC)
     await session.commit()
+    return notification_view(row)
+
+
+def notification_view(n: Notification) -> NotificationView:
     return NotificationView(
-        id=str(row.id), message=row.message, created_at=row.created_at, read_at=row.read_at
+        id=str(n.id),
+        family_id=str(n.family_id) if n.family_id else None,
+        message=n.message,
+        created_at=n.created_at,
+        read_at=n.read_at,
     )
 
 

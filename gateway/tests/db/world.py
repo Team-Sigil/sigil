@@ -1,7 +1,7 @@
 """A signed family, an active signed policy and a fake crypto layer, for DB tests."""
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -240,6 +240,13 @@ class World:
         values.update(overrides)
         return TransferInstruction.model_validate(values)
 
+    async def sibling(self) -> "World":
+        """Another dependent of the same guardian, drawing on the same reservoir."""
+        dependent_key, family = await add_family(
+            self.sessionmaker, self.guardian_key, self.family.guardian_token_account
+        )
+        return replace(self, dependent_key=dependent_key, family=family)
+
     async def budget(self) -> BudgetCounter:
         async with self.sessionmaker() as session:
             row = await session.scalar(
@@ -249,21 +256,29 @@ class World:
             return row
 
 
-async def build_world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
-    guardian_key, dependent_key = SigningKey.generate(), SigningKey.generate()
+async def add_family(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    guardian_key: SigningKey,
+    guardian_token_account: str,
+) -> tuple[SigningKey, Family]:
+    """A new dependent of this guardian, registered and with a signed active policy."""
+    dependent_key = SigningKey.generate()
     guardian_wallet, dependent_wallet = wallet(guardian_key), wallet(dependent_key)
     dependent_account = wallet()
     async with sessionmaker() as session:
-        guardian = User(wallet_address=guardian_wallet, role=Role.GUARDIAN)
+        guardian = await session.scalar(select(User).where(User.wallet_address == guardian_wallet))
+        if guardian is None:
+            guardian = User(wallet_address=guardian_wallet, role=Role.GUARDIAN)
+            session.add(guardian)
         dependent = User(wallet_address=dependent_wallet, role=Role.DEPENDENT)
-        session.add_all([guardian, dependent])
+        session.add(dependent)
         await session.flush()
         registration = register_dependent_message(None, dependent_wallet, dependent_account, "n0")
         family = Family(
             guardian_user_id=guardian.id,
             dependent_user_id=dependent.id,
             dependent_token_account=dependent_account,
-            guardian_token_account=wallet(),
+            guardian_token_account=guardian_token_account,
             registration_signature=base58.b58encode(
                 guardian_key.sign(registration.encode()).signature
             ).decode(),
@@ -287,6 +302,13 @@ async def build_world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
             )
         )
         await session.commit()
+    return dependent_key, family
+
+
+async def build_world(sessionmaker: async_sessionmaker[AsyncSession]) -> World:
+    guardian_key = SigningKey.generate()
+    guardian_wallet = wallet(guardian_key)
+    dependent_key, family = await add_family(sessionmaker, guardian_key, wallet())
 
     crypto = FakeCrypto(owner=guardian_wallet)
     engine = TransferEngine(

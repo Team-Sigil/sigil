@@ -17,7 +17,7 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -126,6 +126,28 @@ async def pending_amount(session: AsyncSession, request_id: uuid.UUID) -> int:
     return int(total or 0)
 
 
+async def lock_reservoir(session: AsyncSession, token_account: str) -> None:
+    """Serializes clearing transfers that draw on one reservoir, across all of the guardian's
+    dependents, until the transaction ends. Taken before any budget row lock."""
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"reservoir:{token_account}"}
+    )
+
+
+async def reservoir_pending(session: AsyncSession, token_account: str) -> int:
+    """Money cleared from this reservoir, by any family, that has not settled yet. It is still
+    inside the on-chain delegation, so it is not available to anyone else."""
+    total = await session.scalar(
+        select(func.coalesce(func.sum(Transfer.amount), 0))
+        .join(Family, Family.id == Transfer.family_id)
+        .where(
+            Family.guardian_token_account == token_account,
+            Transfer.status == TransferStatus.PENDING,
+        )
+    )
+    return int(total or 0)
+
+
 def parse_uuid(value: str | None) -> uuid.UUID | None:
     if value is None:
         return None
@@ -191,6 +213,7 @@ class TransferEngine:
             # Network read before taking the lock, so no lock waits on the crypto layer.
             delegated_remaining = await self._delegated_remaining(found)
 
+            await lock_reservoir(session, family.guardian_token_account)
             week = week_start(now, family.timezone)
             await session.execute(
                 insert(BudgetCounter)
@@ -425,6 +448,7 @@ class TransferEngine:
             destination_registered=destination_registered,
             spent=budget.spent,
             reserved=budget.reserved,
+            reservoir_reserved=await reservoir_pending(session, family.guardian_token_account),
             delegated_remaining=delegated_remaining,
             expected_allowance_key=allowance_key(dependent_id, now, family.timezone),
             request=request_facts,

@@ -43,6 +43,7 @@ from gateway.db.models import (
 from gateway.engine.transfers import (
     parse_uuid,
     pending_amount,
+    reservoir_pending,
     usable_delegation,
     verified_approvals,
     week_start,
@@ -97,11 +98,24 @@ async def members_by_dependent(session: AsyncSession, dependent_id: str) -> Memb
     return await _members(session, Family.dependent_user_id == dependent_uuid)
 
 
-async def members_by_guardian(session: AsyncSession, guardian_id: str) -> Members:
+async def guardian_families(session: AsyncSession, guardian_id: str) -> tuple[User, list[Family]]:
+    """A guardian and all of their families (one per dependent), oldest first."""
     guardian_uuid = parse_uuid(guardian_id)
-    if guardian_uuid is None:
+    guardian = await session.get(User, guardian_uuid) if guardian_uuid else None
+    families = (
+        list(
+            await session.scalars(
+                select(Family)
+                .where(Family.guardian_user_id == guardian_uuid)
+                .order_by(Family.created_at, Family.id)
+            )
+        )
+        if guardian
+        else []
+    )
+    if guardian is None or not families:
         raise NotFoundError("No such guardian.")
-    return await _members(session, Family.guardian_user_id == guardian_uuid)
+    return guardian, families
 
 
 async def members_by_both(session: AsyncSession, guardian_id: str, dependent_id: str) -> Members:
@@ -165,7 +179,8 @@ async def get_context(
     )
     # Reserved money is as good as spent for the agent's planning.
     spent = (budget.spent + budget.reserved) if budget else 0
-    reserved = budget.reserved if budget else 0
+    # The reservoir is shared by all of the guardian's dependents.
+    reserved = await reservoir_pending(session, family.guardian_token_account)
 
     try:
         delegation = await crypto.get_delegation(family.guardian_token_account)
@@ -269,12 +284,14 @@ async def get_proof(session: AsyncSession, proof_id: str) -> agent.Proof:
 
 
 async def guardian_answers(session: AsyncSession, guardian_id: str) -> list[agent.GuardianAnswer]:
-    members = await members_by_guardian(session, guardian_id)
+    """Answers across all of the guardian's dependents; each names its dependent."""
+    _, families = await guardian_families(session, guardian_id)
+    dependent_of = {f.id: str(f.dependent_user_id) for f in families}
     rows = await session.execute(
         select(GuardianQuestion, Request.amount_requested)
         .outerjoin(Request, Request.id == GuardianQuestion.request_id)
         .where(
-            GuardianQuestion.family_id == members.family.id,
+            GuardianQuestion.family_id.in_(dependent_of),
             GuardianQuestion.status == QuestionStatus.ANSWERED,
         )
         .order_by(GuardianQuestion.answered_at)
@@ -287,7 +304,7 @@ async def guardian_answers(session: AsyncSession, guardian_id: str) -> list[agen
         answers.append(
             agent.GuardianAnswer(
                 question_id=str(question.id),
-                dependent_id=str(members.dependent.id),
+                dependent_id=dependent_of[question.family_id],
                 category=as_category(question.category or ""),
                 answer="partial" if partial else "approved" if approved else "declined",
                 amount=amount if approved else 0,
@@ -300,11 +317,12 @@ async def guardian_answers(session: AsyncSession, guardian_id: str) -> list[agen
 async def usage_status(
     session: AsyncSession, guardian_id: str, daily_budget: int, now: datetime
 ) -> agent.UsageStatus:
-    members = await members_by_guardian(session, guardian_id)
-    day = now.astimezone(ZoneInfo(members.family.timezone)).date()
+    guardian, families = await guardian_families(session, guardian_id)
+    # The usage "family" is the guardian; their first family's timezone sets the day.
+    day = now.astimezone(ZoneInfo(families[0].timezone)).date()
     used = await session.scalar(
         select(LlmUsage.tokens_used).where(
-            LlmUsage.family_id == members.family.id, LlmUsage.day == day
+            LlmUsage.guardian_user_id == guardian.id, LlmUsage.day == day
         )
     )
     return agent.UsageStatus(remaining_tokens=daily_budget - (used or 0))
@@ -316,13 +334,13 @@ async def usage_status(
 async def report_usage(
     session: AsyncSession, report: agent.UsageReport, daily_budget: int, now: datetime
 ) -> agent.UsageStatus:
-    members = await members_by_guardian(session, report.family_id)
-    day = now.astimezone(ZoneInfo(members.family.timezone)).date()
+    guardian, families = await guardian_families(session, report.family_id)
+    day = now.astimezone(ZoneInfo(families[0].timezone)).date()
     tokens = report.input_tokens + report.output_tokens
-    stmt = insert(LlmUsage).values(family_id=members.family.id, day=day, tokens_used=tokens)
+    stmt = insert(LlmUsage).values(guardian_user_id=guardian.id, day=day, tokens_used=tokens)
     used = await session.scalar(
         stmt.on_conflict_do_update(
-            index_elements=[LlmUsage.family_id, LlmUsage.day],
+            index_elements=[LlmUsage.guardian_user_id, LlmUsage.day],
             set_={"tokens_used": LlmUsage.tokens_used + tokens},
         ).returning(LlmUsage.tokens_used)
     )
@@ -441,11 +459,13 @@ async def propose_policy_update(
 async def notify(session: AsyncSession, note: agent.Notification, bus: EventBus) -> agent.Receipt:
     audience = Audience(note.audience)
     if audience == Audience.GUARDIAN:
-        members = await members_by_guardian(session, note.recipient_id)
-        recipient = members.guardian
+        # The agent names only the guardian, who may have several dependents: a
+        # guardian-wide note (e.g. "top up the shared reservoir").
+        recipient, families = await guardian_families(session, note.recipient_id)
+        family_id = None
     else:
         members = await members_by_dependent(session, note.recipient_id)
-        recipient = members.dependent
+        recipient, families, family_id = members.dependent, [members.family], members.family.id
     if note.dedupe_key is not None:
         existing = await session.scalar(
             select(Notification.id).where(Notification.dedupe_key == note.dedupe_key)
@@ -453,7 +473,7 @@ async def notify(session: AsyncSession, note: agent.Notification, bus: EventBus)
         if existing is not None:
             return agent.Receipt(id=str(existing))
     row = Notification(
-        family_id=members.family.id,
+        family_id=family_id,
         audience=audience,
         recipient_id=recipient.id,
         message=note.message,
@@ -461,12 +481,13 @@ async def notify(session: AsyncSession, note: agent.Notification, bus: EventBus)
     )
     session.add(row)
     await session.commit()
-    bus.publish(
-        members.family.id,
-        EventType.NOTIFICATION,
-        {"notification_id": str(row.id)},
-        Role.GUARDIAN if audience == Audience.GUARDIAN else Role.DEPENDENT,
-    )
+    for family in families:
+        bus.publish(
+            family.id,
+            EventType.NOTIFICATION,
+            {"notification_id": str(row.id)},
+            Role.GUARDIAN if audience == Audience.GUARDIAN else Role.DEPENDENT,
+        )
     return agent.Receipt(id=str(row.id))
 
 

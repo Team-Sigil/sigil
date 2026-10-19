@@ -47,7 +47,8 @@ class VerifyRequest(BaseModel):
 class TokenResponse(BaseModel):
     token: str
     role: Role
-    family_id: str | None
+    family_id: str | None  # set when the user has exactly one family
+    family_ids: list[str]  # a guardian's families, one per dependent
 
 
 def _iso(value: datetime) -> str:
@@ -109,4 +110,5 @@ async def verify(body: VerifyRequest, request: Request, session: SessionDep) -> 
         token=token,
         role=principal.role,
         family_id=str(principal.family.id) if principal.family else None,
+        family_ids=[str(f.id) for f in principal.families],
     )
