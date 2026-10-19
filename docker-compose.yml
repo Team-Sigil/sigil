@@ -136,8 +136,10 @@ services:
       SIGNER_MASTER_KEY: ${SIGNER_MASTER_KEY:?run ./sigil init}
       SOLANA_RPC_URL: ${SOLANA_RPC_URL:-https://api.devnet.solana.com}
       DATABASE_URL_READONLY: postgresql://sigil_signer_ro:${SIGIL_SIGNER_RO_PASSWORD}@postgres:5432/sigil
-      SIGNER_MAX_PER_TRANSFER_UNITS: ${SIGNER_MAX_PER_TRANSFER_UNITS:-200000000}
-      SIGNER_MAX_PER_DAY_UNITS: ${SIGNER_MAX_PER_DAY_UNITS:-300000000}
+      # The signer's own caps, behind the guardian's policy: 20,000 per transfer and 50,000 a
+      # day (base units), sized for amounts in baht.
+      SIGNER_MAX_PER_TRANSFER_UNITS: ${SIGNER_MAX_PER_TRANSFER_UNITS:-20000000000}
+      SIGNER_MAX_PER_DAY_UNITS: ${SIGNER_MAX_PER_DAY_UNITS:-50000000000}
       MOCK_CHAIN: ${MOCK_CHAIN:-false}
     volumes:
       - signer-data:/data  # the idempotency ledger must survive restarts (SEC-07)

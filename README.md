@@ -86,8 +86,9 @@ devnet SOL at https://faucet.solana.com.
 ./sigil crypto token_metadata set   # optional: wallets show "aUSD" instead of "Unknown Token"
 ```
 
-This creates the aUSD mint, the guardian's reservoir with 1,000 aUSD, and demo dependents
-(keys in `devnet/dependent-N.json`, addresses in `devnet/seed.json`). It is safe to re-run:
+This creates the aUSD mint, the guardian's reservoir with 1,000,000 aUSD (`--fund`; amounts are
+sized for baht), and demo dependents (keys in `devnet/dependent-N.json`, addresses in
+`devnet/seed.json`). It is safe to re-run:
 it reuses everything and only tops the reservoir back up. Without `--guardian` it makes a
 throwaway guardian key instead and approves the agent itself (step 5 is then done).
 
@@ -112,7 +113,7 @@ removed again:
 read -rs KEY && docker exec -i sigil-stack-signer-1 python -c \
   "import sys, json; from solders.keypair import Keypair; print(json.dumps(list(bytes(Keypair.from_base58_string(sys.stdin.read().strip())))))" \
   <<< "$KEY" > devnet/guardian.json && chmod 600 devnet/guardian.json; unset KEY
-./sigil crypto delegation approve 500   # up to 500 aUSD; a new approve replaces the old amount
+./sigil crypto delegation approve 500000   # up to 500,000; a new approve replaces the old amount
 rm devnet/guardian.json
 ```
 
@@ -263,7 +264,7 @@ All variables live in `.env` (template: `.env.example`).
 | `AGENT_SCHEDULER` | agent | `1` |
 | `PDF_ALLOWED_SIGNERS` | gateway | `LAZADA EXPRESS COMPANY LIMITED` (exact match). The trusted roots go in `config/pdf-trusted-roots.pem` (Lazada's certificate is issued by Thai Digital ID CA G3); while it holds no certificate, no PDF receipt counts |
 | `SOLANA_RPC_URL` | signer | `https://api.devnet.solana.com` (devnet only) |
-| `SIGNER_MAX_PER_TRANSFER_UNITS`, `SIGNER_MAX_PER_DAY_UNITS` | signer | 200 and 300 aUSD |
+| `SIGNER_MAX_PER_TRANSFER_UNITS`, `SIGNER_MAX_PER_DAY_UNITS` | signer | 20,000 and 50,000 aUSD (amounts are sized for baht) |
 | `MOCK_CHAIN` | signer | `false`; `true` skips the chain on transfers |
 
 Service URLs (`AGENT_URL`, `CRYPTO_URL`, `PLATFORM_API_URL`, DB URLs) are fixed in

@@ -2,7 +2,7 @@
 
     AGENT_WALLET_PUBKEY=<pubkey> uv run python -m scripts.setup_devnet
     ... --guardian <Phantom wallet>   # use a real Phantom wallet as the guardian
-    ... --dependents 2 --fund 1000 --delegate 500
+    ... --dependents 2 --fund 1000000 --delegate 500000
 
 1. a payer keypair (mint authority and fee payer for setup), funded by airdrop;
 2. the aUSD mint, 6 decimals (AUSD_MINT);
@@ -69,8 +69,9 @@ async def main() -> None:
     parser.add_argument("--agent", default=os.environ.get("AGENT_WALLET_PUBKEY"))
     parser.add_argument("--guardian", help="a Phantom wallet to use as the guardian")
     parser.add_argument("--dependents", type=int, default=2)
-    parser.add_argument("--fund", type=int, default=1_000, help="aUSD minted to the guardian")
-    parser.add_argument("--delegate", type=int, default=500, help="aUSD approved to the agent")
+    # Baht-sized amounts: a demo reservoir of 1,000,000, half of it approved to the agent.
+    parser.add_argument("--fund", type=int, default=1_000_000, help="aUSD minted to the guardian")
+    parser.add_argument("--delegate", type=int, default=500_000, help="aUSD approved to the agent")
     args = parser.parse_args()
     if not args.agent:
         sys.exit("Set AGENT_WALLET_PUBKEY or pass --agent (see scripts.new_agent_wallet)")
