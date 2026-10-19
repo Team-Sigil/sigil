@@ -139,7 +139,9 @@ class MakerAgent:
         request = self._api.get_request(request_id)
         ctx = self._api.get_context(request.dependent_id)
         log = GuardrailLog()
-        refs = request.proofs[: self._limits.max_proofs_per_request]
+        # The newest proofs: a request may have any number, and the latest upload must be
+        # read. The cap keeps the images sent to the model (on every turn) bounded.
+        refs = request.proofs[-self._limits.max_proofs_per_request :]
         if len(request.proofs) > len(refs):
             log.add("proofs_capped", str(len(request.proofs)))
         proofs = [self._api.get_proof(ref.id) for ref in refs]

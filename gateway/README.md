@@ -134,8 +134,7 @@ does not lift it. The
 scheduled allowance still runs, since it is the guardian's own standing instruction. Only
 attached proofs that count as evidence back a transfer and have their keys spent, so a
 receipt shown as a non-counting file can still settle what is owed. Once a receipt is
-owed, the 3-proof limit on the request starts again and the agent sees only the proofs sent
-since. The agent sees the open receipts in its context (`proofs_owed`, `max_proofs_owed`)
+owed, the agent sees only the proofs sent since. The agent sees the open receipts in its context (`proofs_owed`, `max_proofs_owed`)
 and on the request that owes one (`proof_owed`). The obligation is settled through
 `POST /agent/v1/proof-obligations/{id}/settle`,
 where the agent names the proof it read and what it found: under the reservoir lock, the
@@ -320,7 +319,8 @@ nonce:{nonce}
 iPhone photos as JPEG, not HEIC; at least 200 px), a **PDF** (an online order's receipt,
 which cannot be photographed — see "Signed PDF receipts"), or plain text (stored as the
 dependent's claim, never as evidence). Up to 15 MB as uploaded (a PDF up to 5 MB, since it is
-sent to the agent as uploaded and the agent reads at most 5 MB) and 3 per request. The gateway applies
+sent to the agent as uploaded and the agent reads at most 5 MB), any number per request (each
+counts towards the daily message quota; the agent reads the newest 3). The gateway applies
 the EXIF rotation, strips all metadata (GPS included) by re-encoding, limits the long edge to
 2,576 px and keeps the stored copy under 3.75 MB; the agent only sees that copy, and the
 original is kept encrypted. Flags set at upload: `duplicate` (same bytes as an earlier proof from

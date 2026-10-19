@@ -191,15 +191,16 @@ class TestProofs:
         response = await upload(app_client, headers, request_id, data, content_type)
         assert response.status_code == 422
 
-    async def test_size_and_count_limits(self, app_client: httpx.AsyncClient, world: World) -> None:
+    async def test_size_limit_and_no_count_limit(
+        self, app_client: httpx.AsyncClient, world: World
+    ) -> None:
         headers = await login(app_client, world.dependent_key)
         request_id = (await new_request(app_client, headers))["request"]["id"]
         too_big = JPEG + b"0" * (15 * 1024 * 1024)
         assert (await upload(app_client, headers, request_id, too_big)).status_code == 413
-        for i in range(3):
+        for i in range(5):  # any number of proofs; the daily message quota bounds them
             response = await upload(app_client, headers, request_id, png(10 + i))
             assert response.status_code == 200
-        assert (await upload(app_client, headers, request_id, png(20))).status_code == 409
 
 
 class TestGuardianAnswers:

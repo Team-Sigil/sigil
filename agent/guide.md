@@ -69,10 +69,10 @@ What this means for your app:
   asks the dependent instead. If the dependent states an amount later in the chat,
   update `amount_requested`; the agent never takes an amount from the text.
 - **Let dependents attach a receipt, quote or photo.** Amounts at or above the
-  guardian's proof threshold are never sent without one. The agent looks at the first
-  3 proofs on a request. Each must be JPEG, PNG, WebP, GIF (first frame only) or plain
-  text, and at most 5 MB; anything else is skipped. Limit uploads to 3 in your app, so
-  that no proof is silently ignored. If the agent runs on a text-only model (for example
+  guardian's proof threshold are paid first and the receipt is owed afterwards. A request
+  may carry any number of proofs; the agent looks at the newest 3, so the latest upload is
+  always read. Each must be JPEG, PNG, WebP, GIF (first frame only) or plain text, and at
+  most 5 MB; anything else is skipped. If the agent runs on a text-only model (for example
   Nemotron on OpenRouter), receipt *photos* can't be checked: requests that need proof
   then go to the guardian (`asked_guardian`) instead of being sent.
 - **Online orders can send the shop's PDF receipt.** The platform verifies the shop's

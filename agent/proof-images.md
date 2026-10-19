@@ -13,7 +13,7 @@ on its own. Rules are in `maker/context.py` and `config.py`.
 
 | Check | Rule | If it fails |
 |---|---|---|
-| Proofs per request | The first 3 refs on the request; the rest are ignored | Logged as `proofs_capped` |
+| Proofs per request | The newest 3 refs on the request; older ones aren't read | Logged as `proofs_capped` |
 | Media type | `image/jpeg`, `image/png`, `image/webp`, `image/gif`, or `text/plain` | Proof skipped |
 | Encoding | `data_b64` must be valid base64 | Proof skipped |
 | Size | At most 5 MB **decoded** | Proof skipped |
@@ -93,8 +93,8 @@ agent sandbox and before anything is stored. We propose the upload endpoint:
    **3.75 MB** so it works on every Claude platform.
 5. **Stores `size_bytes` as the exact length of the stored bytes,** and `media_type` from
    the re-encoded format.
-6. **Caps uploads** at the gateway (for example 15 MB raw) and at **3 proofs per
-   request**, so the agent's cap never silently drops a proof.
+6. **Caps upload size** at the gateway (for example 15 MB raw). There is no cap on the number
+   of proofs: each counts towards the daily message quota, and the agent reads the newest 3.
 
 Once this ships, the agent can lower `max_proof_bytes` to match, and treat a proof that
 breaks these rules as tampering.

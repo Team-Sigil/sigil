@@ -553,3 +553,15 @@ def test_the_same_order_pdf_cannot_back_two_transfers(platform, make_agent, add_
     agent, *_ = _send_30(make_agent, proof=ORDER)
     record = agent.handle_request("r1")
     assert len(platform.sent) == 1 and "engine_blocked: proof already used" in record.guardrail_events
+
+
+def test_the_newest_proofs_are_read_when_there_are_many(platform, make_agent, add_request):
+    """A request can carry any number of proofs; the latest upload must always be read."""
+    add_request(amount=30, proofs=[_ref(f"p{i}") for i in range(4)])
+    for i in range(4):
+        platform.add_proof(_image(f"p{i}", data=PNG + bytes([i])))
+    agent, *_ = _send_30(make_agent)
+    record = agent.handle_request("r1")
+    fetched = [path for _, method, path in platform.http_log if method == "GET" and "/proofs/" in path]
+    assert fetched == ["/agent/v1/proofs/p1", "/agent/v1/proofs/p2", "/agent/v1/proofs/p3"]
+    assert "proofs_capped: 4" in record.guardrail_events
