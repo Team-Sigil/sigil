@@ -43,18 +43,117 @@ iOS app ──► gateway :8000 ──► agent :8100 ──► Claude API / Ope
               └──► postgres :5432 ◄── signer (read-only registered_destinations)
 ```
 
-## Quick start
+## Setup
 
 Needs Docker and openssl. No Python or uv on the host: the devnet scripts run inside the
 signer image.
 
+### 1. Configure
+
 ```sh
 git clone git@github.com:Team-Sigil/sigil.git && cd sigil
 ./sigil init      # creates .env with generated secrets and the agent wallet
-# set the model provider key (OPENROUTER_API_KEY or ANTHROPIC_API_KEY) and SIWS_DOMAIN in .env
-./sigil devnet    # aUSD mint + demo accounts on devnet, writes AUSD_MINT
+```
+
+Then set these in `.env`:
+
+- **The model.** `OPENROUTER_API_KEY` (or `ANTHROPIC_API_KEY` with
+  `AGENT_LLM_PROVIDER=anthropic`). Paid OpenRouter models need credits on that account,
+  otherwise every call fails with `402`. What the demo server runs, fast and about $0.0003
+  per call:
+
+  ```sh
+  AGENT_MAKER_MODEL=deepseek/deepseek-v4.1-flash-1017
+  AGENT_AUDITOR_MODEL=deepseek/deepseek-v4.1-flash-1017
+  AGENT_OPENROUTER_VISION=1     # it reads receipt photos
+  AGENT_MAKER_EFFORT=medium     # a policy interview turn: ~23 s instead of ~60 s at high
+  ```
+
+- **`SIWS_DOMAIN`**: the host of the `app_url` the iOS app gives Phantom (for example
+  `iden.casa` for `https://iden.casa`). Sign-in fails if they differ.
+- **`RATE_LIMIT_PER_MIN`** (optional, default 30 calls per minute per session): an app that
+  polls needs more; the demo server uses 1000.
+
+### 2. Fund the agent wallet
+
+`./sigil init` prints `AGENT_WALLET_PUBKEY`. It pays the fee for every transfer, so send it
+devnet SOL at https://faucet.solana.com.
+
+### 3. Create the devnet accounts
+
+```sh
+./sigil devnet --guardian <guardian's Phantom wallet>   # add --dependents 4 for more
+./sigil crypto token_metadata set   # optional: wallets show "aUSD" instead of "Unknown Token"
+```
+
+This creates the aUSD mint, the guardian's reservoir with 1,000 aUSD, and demo dependents
+(keys in `devnet/dependent-N.json`, addresses in `devnet/seed.json`). It is safe to re-run:
+it reuses everything and only tops the reservoir back up. Without `--guardian` it makes a
+throwaway guardian key instead and approves the agent itself (step 5 is then done).
+
+### 4. Start
+
+```sh
 ./sigil up        # build and start; gateway on http://127.0.0.1:8000
 ```
+
+To reach it from a phone, set `GATEWAY_BIND=0.0.0.0` (same network) or put a tunnel in front
+of port 8000 (the demo server uses a Cloudflare tunnel to `https://api.iden.casa`).
+
+### 5. Let the agent spend from the reservoir
+
+The guardian must approve the agent wallet on their reservoir; until then every transfer is
+blocked with `insufficient delegation`. The app will do this with Phantom (an SPL `approve`);
+until it does, sign it once on the server with the guardian's key, exported from Phantom
+(Settings → the account → Show Private Key). The key is used for this one transaction and
+removed again:
+
+```sh
+read -rs KEY && docker exec -i sigil-stack-signer-1 python -c \
+  "import sys, json; from solders.keypair import Keypair; print(json.dumps(list(bytes(Keypair.from_base58_string(sys.stdin.read().strip())))))" \
+  <<< "$KEY" > devnet/guardian.json && chmod 600 devnet/guardian.json; unset KEY
+./sigil crypto delegation approve 500   # up to 500 aUSD; a new approve replaces the old amount
+rm devnet/guardian.json
+```
+
+The key must belong to the guardian in `devnet/seed.json` (the last `--guardian` given to
+`./sigil devnet`); for another guardian, re-run step 3 with their wallet first.
+`./sigil crypto delegation show` prints the reservoir, its balance and the delegation.
+
+### 6. First run in the app
+
+The order matters:
+
+1. The guardian signs in with Phantom (a new wallet becomes a guardian).
+2. The guardian registers each dependent: their wallet and aUSD account from
+   `devnet/seed.json`, with the reservoir as `guardian_token_account`.
+3. The guardian runs the policy interview and signs the activation. Until a dependent's family
+   has an active policy, the agent can't act on their requests.
+4. Each dependent signs in. To use a demo dependent, import its key into Phantom as a second
+   account; this prints the key Phantom asks for:
+
+   ```sh
+   docker exec -i sigil-stack-signer-1 python -c \
+     "import sys; from solders.keypair import Keypair; print(Keypair.from_json(sys.stdin.read()))" \
+     < devnet/dependent-1.json
+   ```
+
+The iOS app's side, step by step: [`gateway/docs/auth-guide.md`](gateway/docs/auth-guide.md)
+and [`gateway/docs/app-handoff.md`](gateway/docs/app-handoff.md).
+
+### Optional: signed PDF receipts
+
+Online orders' PDF receipts count as proof only when the shop's signature verifies. Put the
+certificate that issues Lazada's signing certificate (Thai Digital ID CA G3) in
+`config/pdf-trusted-roots.pem`, checked by fingerprint against an independent source such as
+Adobe Acrobat's trust list, never copied out of a PDF. While the file holds no certificate, no
+PDF receipt counts.
+
+### A clean demo
+
+`./sigil reset-db` empties the database (after a backup). Money already sent on devnet stays
+sent: re-run `./sigil devnet --guardian …` to top the reservoir up, approve the agent again
+(step 5), and go through step 6.
 
 `docker-compose.yml` builds each layer from its own folder with that layer's Dockerfile, and
 gives each service only the variables it needs: the agent gets no DB password, the signer no

@@ -27,7 +27,7 @@ on its own. Rules are in `maker/context.py` and `config.py`.
 | Flags | `near_duplicate`, `screenshot`, `no_camera_metadata`, `old_capture`, `edited`, `ai_suspected`, `rephotographed_screen` | Shown, and an Auditor review is forced |
 | Flags | `camera_signed` | Shown as a note; changes no rule. Unknown flags are ignored |
 | PDF receipt (online orders) | Counts only with `issuer_signed` (the platform verified the shop's signature) and content; sent to the model as a document. Camera-only mode doesn't apply | `unchecked_document` or no content: never shown, never counts, and the model asks for the original PDF. Content without `issuer_signed`: skipped, review forced |
-| Model can't read images or PDFs (e.g. Nemotron on OpenRouter) | Image proofs aren't shown to the model and never count | A note tells the model; anything needing proof goes to the guardian |
+| Model can't read images or PDFs (e.g. Nemotron on OpenRouter) | Image proofs aren't shown to the model and never count | A note tells the model; money can still be paid first, but a photo can't settle an owed receipt |
 | Camera-only (`AGENT_CAMERA_ONLY_PROOFS=1`, off by default) | Only `photo` images, and `ocr` text whose `derived_from` is a `photo` on the same request, count | Anything else is shown but doesn't count |
 
 The agent does **not** check:
@@ -289,7 +289,7 @@ payment networks.
 
 1. **Long-edge limit.** Should it be 2576 px (best for small print) or 1568 px (about half
    the tokens and cost)? Test a sample of real receipts at both sizes before deciding.
-2. **Which proofs count.** When a request has more than 3, the agent uses the first 3.
+2. **Which proofs count.** When a request has more than 3, the agent uses the newest 3.
    Should it be the 3 most recent? Or should the platform refuse a 4th upload?
 3. **Where we deploy.** Claude API direct, Bedrock or Google Cloud? This decides the
    per-image size limit.

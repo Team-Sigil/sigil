@@ -398,7 +398,9 @@ structured output), and the sandbox allows only the hosts of the providers in us
 **Text-only models and receipts.** Nemotron 3 Super can't read images or PDFs; the
 same rule applies to both. A model that can't
 see a receipt photo is never shown it and can't count it as proof: it's told an image
-was attached, and anything that needs proof goes to the guardian instead. Text proofs
+was attached. Paying first still works, but a receipt photo can't settle what is owed, so
+owed receipts pile up until the dependent sends text the platform read (OCR) or a
+multimodal model is used. Text proofs
 (OCR) still work. A text-only Auditor is told about images it can't see, and flags when
 the case depends on them. For receipt photos, use a vision model (Claude, or an
 OpenRouter model with `AGENT_OPENROUTER_VISION=1`) for the maker.

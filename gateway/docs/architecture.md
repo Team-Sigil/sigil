@@ -261,7 +261,8 @@ larger or riskier decisions, then the engine and the signer each check independe
   approved" claim in chat never counts.
 - **Auditor review** runs when a transfer is at or above the review threshold, mentions an
   emergency, breaks the dependent's usual pattern (an unusually large amount or a new
-  category) or is an allowance above the usual amount. The agent adds reviews for a
+  category), is paid before any receipt (at or above the proof threshold with no proof
+  attached) or is an allowance above the usual amount. The agent adds reviews for a
   low-confidence category or signs of manipulation in the input; small routine transfers
   skip it. The engine applies the triggers it can verify itself, so the agent cannot skip a
   review by misreporting. The Auditor reads the raw request, any proof, guidance and history
@@ -310,14 +311,21 @@ decide one.
 | --- | --- | --- | --- |
 | Send full amount | Agent | Money sent, with a short reason | Line in the summary |
 | Send partial or counter-offer | Agent | The offer and why ("half now, half after the receipt") | Line in the summary |
-| Ask for proof | Agent, or the policy's proof threshold | Request for a receipt, quote or photo | Proof attached if the agent later asks them |
+| Ask for proof | Agent | Request for a receipt, quote or photo | Proof attached if the agent later asks them |
+| Receipt check | Code, after a receipt arrives for money already sent | "Receipt checked" (`receipt_accepted`) or why it was refused (`receipt_rejected`) | Line in the summary |
 | Ask the guardian | Agent, or the Auditor (flag) | "I've asked your guardian" | The question with the agent's recommendation, answered by wallet signature |
 | Decline | Agent | Reason and an alternative (smaller amount, wait until next week) | Line in the summary |
 | Blocked | Engine or signer (outer limit, funds, recipient) | Reason and an alternative | Flagged in the summary |
 
-**When the agent asks for proof:**
+**Proof comes after payment.** A dependent can't buy anything before being paid, so a
+request at or above the proof threshold is paid first, after an Auditor review, and the
+receipt is owed. When it arrives, a receipt check reads it and the gateway decides whether it
+settles what is owed. A dependent may owe up to 3 receipts; at 3, requests get no more money
+until one is sent (SPEC §8.9).
 
-1. The request is at or above the guardian's proof threshold (required by the engine).
+**When the agent still asks for proof first:**
+
+1. Something already exists to show (a quote, an online order's PDF).
 2. The dependent claims an emergency.
 3. The category is uncertain or repeats unusually often.
 

@@ -22,7 +22,7 @@ maker's `proof_required` guardrail and adds a settle call; the agent layer's
 
 - **Typed from the bytes.** A file starting with `%PDF-` is a PDF, whatever its
   `Content-Type`. At most **5 MB** (your `max_proof_bytes`, so nothing the gateway accepts
-  is too large for you), 3 proofs per request like any other proof.
+  is too large for you), and counts like any other proof (the agent reads the newest 3).
 - **Signature check at upload** (`proof_pdf.py`). The signed byte range must cover the whole
   file except the signature itself, the digest must match, the CMS signature must verify,
   the signing certificate must chain to a root in `PDF_TRUSTED_ROOTS_PATH` and be valid

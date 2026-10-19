@@ -33,7 +33,7 @@ more than the guardian allowed, to anyone other than the dependent.
 
 | Layer | Owner | Where | State |
 |---|---|---|---|
-| App | Shine | `Team-Sigil/sigil-ios` | Native iOS, SwiftUI. **Screens only** — mock data, no API calls, no wallet yet |
+| App | Shine | `Team-Sigil/sigil-ios` | Native iOS, SwiftUI, connected to the live gateway: Phantom sign-in, registering dependents, the policy interview, requests and live updates. Not yet: approving the delegation in Phantom |
 | Agent | Alwin | `agent/` | Maker, Auditor, scheduler, policy interview, guardrails. Built and tested |
 | Gateway | Julian | `gateway/` | App API, platform API, policy engine, database, audit log. Built and tested |
 | Crypto | Han | `crypto/` | Signer, delegation reads, `transfer_checked` on devnet, devnet setup scripts. Built and tested |
@@ -46,10 +46,10 @@ Detail: [SPEC §3](gateway/SPEC.md), [architecture.md](gateway/docs/architecture
 
 | Feature | Where it lives | State |
 |---|---|---|
-| Sign in with their wallet, no password | Gateway `/auth/*`, [auth-guide.md](gateway/docs/auth-guide.md) | Gateway done; app not wired |
+| Sign in with their wallet, no password | Gateway `/auth/*`, [auth-guide.md](gateway/docs/auth-guide.md) | Done |
 | Register a dependent by signing a message naming their wallet and account | `POST /families` | Done |
 | Support **several dependents**, each with their own policy, budget, freeze and history | One family per dependent | Done |
-| Fund one reservoir shared by all of them, by signing an SPL `approve` in Phantom | Crypto layer (delegation reads) | Signer done; app not wired |
+| Fund one reservoir shared by all of them, by signing an SPL `approve` in Phantom | Crypto layer (delegation reads) | Signer done; app not built yet (a devnet script stands in) |
 | Set the policy **by chatting with the agent**, not by filling in a form | `/policy/interview`, [policy-protocol.md](agent/policy-protocol.md) | Done |
 | Review the draft with test scenarios ("if X asks for Y, I would Z") before agreeing | Interview `ready` state | Done |
 | Activate a policy by signing its hash, so nothing takes effect unsigned | `activate-policy` signature | Done |
@@ -63,7 +63,7 @@ Detail: [SPEC §3](gateway/SPEC.md), [architecture.md](gateway/docs/architecture
 
 | Feature | Where it lives | State |
 |---|---|---|
-| Sign in with their own wallet | Gateway `/auth/*` | Gateway done; app not wired |
+| Sign in with their own wallet | Gateway `/auth/*` | Done |
 | Ask for money in a few taps: an amount, what it's for, optionally a note | App `AskSheet` | App built (branch), not wired |
 | Say it is an emergency, which jumps the queue without lifting any limit | `emergency_claimed` | Done |
 | Get an answer in their own words from the agent, not a reason code | `decision.reply_to_dependent` | Done |
@@ -139,9 +139,9 @@ nobody without their own money can produce.
 | | |
 |---|---|
 | **Works today** | The gateway, the agent layer and the signer, together (`./sigil up`): a dependent can ask, the agent can decide, the Auditor can flag, the engine can clear or block, the signer re-checks and signs, and everything is logged |
-| **Devnet** | The signer is tested against an in-memory chain that executes its real transactions; `./sigil devnet` creates the aUSD mint and demo accounts for live devnet transfers |
-| **Screens only** | The iOS app. Every screen renders from mock data; no sign-in, no API calls, no Phantom, no camera |
-| **Known gaps** | Listed in [README "Known gaps"](gateway/README.md): one gateway instance, no C2PA or AI-image detection, synchronous agent calls, policy proposals not adoptable in one click |
+| **Devnet** | Live: real aUSD transfers are signed and finalized on Solana devnet (`./sigil devnet` creates the mint and demo accounts) |
+| **In progress** | The iOS app's delegation approve; the demo uses a devnet script for it |
+| **Known gaps** | Listed in [README "Known gaps"](gateway/README.md): one gateway instance, no C2PA or AI-image detection, synchronous agent calls, policy proposals not adoptable in one click, owed receipts can't be waived |
 
 ## Where the detail lives
 
