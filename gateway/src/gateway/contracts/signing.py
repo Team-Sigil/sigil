@@ -1,6 +1,6 @@
-"""Exact texts of guardian-signed messages (SPEC §8.4).
+"""Exact texts of guardian-signed messages (SPEC §7.5).
 
-The web app must produce byte-identical text; the server always rebuilds the message from its own
+The iOS app must produce byte-identical text; the server always rebuilds the message from its own
 data and the submitted nonce, never trusting a client-supplied message.
 """
 

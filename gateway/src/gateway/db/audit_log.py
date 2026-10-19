@@ -1,4 +1,4 @@
-"""Append-only, hash-chained audit log (SPEC §14, SEC-16)."""
+"""Append-only, hash-chained audit log (SPEC §12, SEC-16)."""
 
 import uuid
 from collections.abc import Sequence
@@ -14,7 +14,7 @@ from gateway.enums import AuditEvent
 
 
 def format_timestamp(value: datetime) -> str:
-    """ISO 8601 UTC with microseconds and `Z`, as hashed (SPEC §14)."""
+    """ISO 8601 UTC with microseconds and `Z`, as hashed (SPEC §12)."""
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 

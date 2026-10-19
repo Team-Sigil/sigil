@@ -200,7 +200,7 @@ def test_delegation_amount_is_a_strict_int() -> None:
         Delegation.model_validate({"token_account": "a", "delegated_amount_units": 1.5})
 
 
-# --- signed messages (SPEC §8.4) --------------------------------------------------------------
+# --- signed messages (SPEC §7.5) --------------------------------------------------------------
 
 FAMILY = UUID("11111111-1111-4111-8111-111111111111")
 QUESTION = UUID("22222222-2222-4222-8222-222222222222")

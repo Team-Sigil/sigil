@@ -1,4 +1,4 @@
-"""Dependent money requests and their conversations (SPEC §16.2).
+"""Dependent money requests and their conversations (SPEC §14.2).
 
 Every new message or proof is stored, then the agent runs on the request
 (`POST /v1/requests/{id}/process`). If the agent is unavailable the message is kept and the

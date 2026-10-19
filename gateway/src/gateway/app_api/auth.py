@@ -1,4 +1,4 @@
-"""Sign-In With Solana (SPEC §16.1, SEC-09) and nonces for every guardian signature."""
+"""Sign-In With Solana (SPEC §7.2, SEC-09) and nonces for every guardian signature."""
 
 import re
 from datetime import UTC, datetime
@@ -32,7 +32,7 @@ class NonceRequest(BaseModel):
 
 class NonceResponse(BaseModel):
     nonce: str
-    message: str | None  # the exact sign-in text for `login`; other purposes use SPEC §8.4
+    message: str | None  # the exact sign-in text for `login`; other purposes use SPEC §7.5
     expires_at: datetime
 
 

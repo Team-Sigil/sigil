@@ -1,4 +1,4 @@
-"""Who am I, and family registration (SPEC §16.1 step 2)."""
+"""Who am I, and family registration (SPEC §14.1)."""
 
 from datetime import UTC, datetime
 

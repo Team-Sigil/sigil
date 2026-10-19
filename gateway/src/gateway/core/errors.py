@@ -52,7 +52,7 @@ class ErrorDetail(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """Error envelope for every failed request (SPEC §8.1)."""
+    """Error envelope for every failed request (SPEC §7.2)."""
 
     error: ErrorDetail
 

@@ -59,7 +59,7 @@ class PolicyBody(BaseModel):
 
 
 def policy_hash(body: PolicyBody) -> str:
-    """SHA-256 hex of the canonical JSON of the body (SPEC §6.4, §7)."""
+    """SHA-256 hex of the canonical JSON of the body (SPEC §5.4, §6)."""
     return sha256_hex(canonical_json(body.model_dump(mode="json")))
 
 

@@ -12,7 +12,7 @@ ED25519_SIGNATURE_BYTES = 64
 
 
 def canonical_json(obj: Any) -> str:
-    """Canonical JSON for hashing and signing (SPEC §6.4)."""
+    """Canonical JSON for hashing and signing (SPEC §5.4)."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 

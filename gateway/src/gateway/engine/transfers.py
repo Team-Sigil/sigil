@@ -70,7 +70,7 @@ SIGNER_UNAVAILABLE = "signer unavailable; transfer pending"
 
 
 def week_start(now: datetime, timezone: str) -> date:
-    """Monday of the budget week containing `now`, in the family timezone (SPEC §6.2)."""
+    """Monday of the budget week containing `now`, in the family timezone (SPEC §5.2)."""
     local = now.astimezone(ZoneInfo(timezone))
     return local.date() - timedelta(days=local.weekday())
 

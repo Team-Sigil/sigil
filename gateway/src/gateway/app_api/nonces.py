@@ -1,5 +1,5 @@
 """Server nonces for wallet signatures: single use, 5 minutes, bound to a wallet and a purpose
-(SPEC SEC-09, §8.4)."""
+(SPEC SEC-09, §7.5)."""
 
 import secrets
 from datetime import datetime, timedelta

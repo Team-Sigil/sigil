@@ -1,7 +1,7 @@
 """Gateway ↔ crypto layer (Han). Defined here; see README "Crypto layer contract".
 
-`POST /v1/transfer` keeps SPEC §8.5's shapes exactly. `GET /v1/delegation/{token_account}`
-is new: the engine's on-chain delegation check (remaining amount and delegate).
+`POST /v1/transfer` sends a cleared transfer; `GET /v1/delegation/{token_account}` is the
+engine's on-chain delegation read (owner, delegate, remaining amount). See SPEC §7.4, §9.
 Every request carries `X-Timestamp`, `X-Nonce` and `X-Signature` (HMAC-SHA256 over
 `{timestamp}.{nonce}.{raw_body}`, empty body for GET).
 """

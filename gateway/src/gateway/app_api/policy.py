@@ -1,4 +1,4 @@
-"""Guardian policy (SPEC §16.1 steps 3-4): drafts come from the policy interview
+"""Guardian policy (SPEC §6, §14.1): drafts come from the policy interview
 (`interview.py`); the guardian signs one to activate it.
 
 Nothing the agent returns becomes a policy until the guardian's wallet signs the activation
@@ -166,7 +166,7 @@ async def get_active(member: MemberDep, session: SessionDep) -> ActivePolicy:
     if row is None:
         raise NotFoundError("No active policy.")
     if member.role == Role.DEPENDENT:
-        # Outer limits only: the guardian's guidance stays private (SPEC SEC-10, §17).
+        # Outer limits only: the guardian's guidance stays private (SPEC SEC-10, §15).
         limits = {k: v for k, v in row.body.items() if k != "guidance"}
         return ActivePolicy(
             id=str(row.id), version=row.version, body=limits, body_hash=None, activated_at=None

@@ -231,7 +231,7 @@ class TestWrites:
         ).json()
         assert [h["kind"] for h in context["history"]] == ["declined"]
 
-    async def test_usage_is_counted_per_family(
+    async def test_usage_is_counted_per_guardian(
         self, client: httpx.AsyncClient, world: World
     ) -> None:
         guardian = str(world.family.guardian_user_id)
