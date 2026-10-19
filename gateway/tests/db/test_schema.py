@@ -223,9 +223,10 @@ class TestSignerReadOnlyRole:
         async with signer_engine.connect() as conn:
             rows = (await conn.execute(text("SELECT * FROM registered_destinations"))).all()
             assert [tuple(r._mapping.keys()) for r in rows] == [
-                ("family_id", "dependent_token_account")
+                ("family_id", "dependent_token_account", "guardian_token_account")
             ]
             assert rows[0].dependent_token_account == family.dependent_token_account
+            assert rows[0].guardian_token_account == family.guardian_token_account
 
     @pytest.mark.parametrize("table", ["families", "users", "audit_log", "transfers", "requests"])
     async def test_cannot_read_tables(
