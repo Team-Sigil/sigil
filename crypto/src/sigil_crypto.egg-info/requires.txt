@@ -1,0 +1,16 @@
+base58>=2.1.1
+cryptography>=50.0.2
+fastapi>=0.146.0
+httpx>=0.28.1
+psycopg[binary,pool]>=3.3.6
+pydantic>=2.14.1
+pydantic-settings>=2.16.0
+solana>=0.41.0
+solders>=0.29.0
+uvicorn[standard]>=0.54.0
+
+[dev]
+mypy>=2.4.0
+pytest>=9.1.1
+pytest-asyncio>=1.4.0
+ruff>=0.17.1

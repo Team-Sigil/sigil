@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: sigil-crypto
+Version: 0.1.0
+Summary: Crypto layer of Sigil: the signer that holds the agent wallet key and sends aUSD on Solana devnet
+Requires-Python: >=3.12
+Requires-Dist: base58>=2.1.1
+Requires-Dist: cryptography>=50.0.2
+Requires-Dist: fastapi>=0.146.0
+Requires-Dist: httpx>=0.28.1
+Requires-Dist: psycopg[binary,pool]>=3.3.6
+Requires-Dist: pydantic>=2.14.1
+Requires-Dist: pydantic-settings>=2.16.0
+Requires-Dist: solana>=0.41.0
+Requires-Dist: solders>=0.29.0
+Requires-Dist: uvicorn[standard]>=0.54.0
+Provides-Extra: dev
+Requires-Dist: mypy>=2.4.0; extra == "dev"
+Requires-Dist: pytest>=9.1.1; extra == "dev"
+Requires-Dist: pytest-asyncio>=1.4.0; extra == "dev"
+Requires-Dist: ruff>=0.17.1; extra == "dev"
