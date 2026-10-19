@@ -120,6 +120,9 @@ async def register_family(
     settings: Settings = request.app.state.settings
     now = datetime.now(UTC)
     # A guardian may support several dependents; each dependent has exactly one guardian.
+    # All of them draw on the guardian's one reservoir (one token account, one delegation).
+    if any(f.guardian_token_account != body.guardian_token_account for f in guardian.families):
+        raise ConflictError("All your dependents share one reservoir: use the same token account.")
     if body.dependent_wallet == guardian.user.wallet_address:
         raise ConflictError("The dependent must use a different wallet.")
 

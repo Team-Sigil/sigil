@@ -188,7 +188,8 @@ family (policy, budget, freeze, questions, interview, history, audit trail). A d
 exactly one guardian. Family-scoped routes act on the family named in the `X-Family-Id`
 header; a guardian with one family may leave it out, and a guardian with several gets
 `400 FAMILY_REQUIRED` without it. A family the caller doesn't belong to is `404`. All of a
-guardian's dependents draw on one reservoir (one token account, one delegation).
+guardian's dependents draw on one reservoir (one token account, one delegation), so a
+second dependent must be registered with the same `guardian_token_account` (else `409`).
 
 | Method | Path | Who | Body → response |
 |---|---|---|---|

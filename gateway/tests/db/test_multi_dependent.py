@@ -15,7 +15,11 @@ class TestSessions:
     async def test_guardian_registers_a_second_dependent(
         self, app_client: httpx.AsyncClient, world: World
     ) -> None:
-        response = await families.TestFamilies().register(app_client, world.guardian_key)
+        response = await families.TestFamilies().register(
+            app_client,
+            world.guardian_key,
+            guardian_token_account=world.family.guardian_token_account,
+        )
         assert response.status_code == 200, response.text
         second = response.json()["family"]["id"]
 
@@ -24,6 +28,18 @@ class TestSessions:
         assert [f["id"] for f in listed] == [str(world.family.id), second]
         me = (await app_client.get("/api/v1/me", headers=headers)).json()
         assert (me["family_id"], me["family_ids"]) == (None, [str(world.family.id), second])
+
+    async def test_second_dependent_must_use_the_same_reservoir(
+        self, app_client: httpx.AsyncClient, world: World
+    ) -> None:
+        other = await families.TestFamilies().register(app_client, world.guardian_key)
+        assert other.status_code == 409
+        same = await families.TestFamilies().register(
+            app_client,
+            world.guardian_key,
+            guardian_token_account=world.family.guardian_token_account,
+        )
+        assert same.status_code == 200, same.text
 
     async def test_guardian_with_several_families_must_choose_one(
         self, app_client: httpx.AsyncClient, world: World
