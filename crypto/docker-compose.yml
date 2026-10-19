@@ -1,0 +1,27 @@
+# The signer alone. Values come from .env (see .env.example). Start with:
+#   docker compose up -d --build
+# The port is published on 127.0.0.1 only: the gateway is the only client (handoff §6).
+# Inside the container, the gateway's Postgres is host.docker.internal:5432, so point
+# DATABASE_URL_READONLY there rather than at localhost.
+
+services:
+  signer:
+    build: .
+    env_file: .env
+    environment:
+      SIGNER_DB_PATH: /data/signer.sqlite3
+      SIGNER_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:8300:8300"
+    volumes:
+      - signer-data:/data  # the idempotency ledger must survive restarts (SEC-07)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8300/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  signer-data:
