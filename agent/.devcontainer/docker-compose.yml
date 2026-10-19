@@ -1,0 +1,9 @@
+services:
+    agent:
+        build:
+            context: ..
+            dockerfile: .devcontainer/Dockerfile
+        userns_mode: keep-id
+        volumes:
+            - ..:/workspace:cached,z
+        command: sleep infinity

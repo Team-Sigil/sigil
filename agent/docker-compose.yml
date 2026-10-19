@@ -1,0 +1,54 @@
+# The agent service plus the in-memory mock platform with the demo family.
+#   ANTHROPIC_API_KEY=sk-... docker compose up --build                               (Claude)
+#   AGENT_LLM_PROVIDER=openrouter OPENROUTER_API_KEY=sk-or-... docker compose up --build  (OpenRouter)
+# Then follow walkthrough.md against http://localhost:8100 and http://localhost:8200.
+
+services:
+  platform:
+    build: .
+    command: ["python", "-m", "mock_platform.server"]
+    environment:
+      MOCK_HOST: 0.0.0.0
+      MOCK_PORT: "8200"
+    ports:
+      - "8200:8200"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8200), 2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  agent:
+    build: .
+    environment:
+      PLATFORM_API_URL: http://platform:8200
+      # The mock platform's fixed test tokens.
+      PLATFORM_MAKER_TOKEN: maker-test-token
+      PLATFORM_AUDITOR_TOKEN: auditor-test-token
+      AGENT_INBOUND_TOKEN: ${AGENT_INBOUND_TOKEN:-change-me}
+      # The agent refuses to start without the key its provider needs.
+      AGENT_LLM_PROVIDER: ${AGENT_LLM_PROVIDER:-anthropic}
+      AGENT_MAKER_PROVIDER: ${AGENT_MAKER_PROVIDER:-}
+      AGENT_AUDITOR_PROVIDER: ${AGENT_AUDITOR_PROVIDER:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AGENT_OPENROUTER_VISION: ${AGENT_OPENROUTER_VISION:-0}
+      AGENT_SCHEDULER: ${AGENT_SCHEDULER:-1}
+      AGENT_CAMERA_ONLY_PROOFS: ${AGENT_CAMERA_ONLY_PROOFS:-0}
+      # Empty: the provider's default model.
+      AGENT_MAKER_MODEL: ${AGENT_MAKER_MODEL:-}
+      AGENT_AUDITOR_MODEL: ${AGENT_AUDITOR_MODEL:-}
+    ports:
+      - "8100:8100"
+    # The sandbox resolves the platform's address once at startup, so the platform
+    # must already be up.
+    depends_on:
+      platform:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
