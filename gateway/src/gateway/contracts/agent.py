@@ -1,9 +1,8 @@
 """The agent layer's platform API payloads, mirrored verbatim.
 
-Source of truth: `agent_layer/contracts.py` in Team-Sigil/agent-layer (as of b5e5d25). The
-gateway serves these shapes on `/agent/v1/*`. Do not edit by hand: change them in the agent
-layer first, then copy. `tests/test_contracts.py` compares the JSON schemas with the agent
-layer whenever it is checked out next to this repo.
+Source of truth: `agent/src/agent_layer/contracts.py` in this monorepo. The gateway serves
+these shapes on `/agent/v1/*`. Do not edit by hand: change them in the agent layer first,
+then copy. `tests/test_contracts.py` compares the JSON schemas with the agent layer's.
 
 Tool arguments and the Auditor's internal outputs stay in the agent layer; they never cross
 the boundary.

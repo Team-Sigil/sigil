@@ -20,7 +20,7 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./repos/sigil-gateway/infra/postgres/init-roles.sh:/docker-entrypoint-initdb.d/01-init-roles.sh:ro
+      - ./gateway/infra/postgres/init-roles.sh:/docker-entrypoint-initdb.d/01-init-roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sigil_owner -d sigil"]
       interval: 2s
@@ -29,7 +29,7 @@ services:
 
   # One-shot: applies the gateway's migrations as the owner role, then exits.
   migrate:
-    build: ./repos/sigil-gateway
+    build: ./gateway
     image: sigil-gateway:local
     command: ["alembic", "upgrade", "head"]
     environment:
@@ -39,7 +39,7 @@ services:
         condition: service_healthy
 
   gateway:
-    build: ./repos/sigil-gateway
+    build: ./gateway
     image: sigil-gateway:local
     environment:
       DATABASE_URL: postgresql+psycopg://sigil_app:${SIGIL_APP_PASSWORD}@postgres:5432/sigil
@@ -82,7 +82,7 @@ services:
       retries: 10
 
   agent:
-    build: ./repos/agent-layer
+    build: ./agent
     image: sigil-agent:local
     environment:
       PLATFORM_API_URL: http://gateway:8000
@@ -120,7 +120,7 @@ services:
 
   # Not published: the gateway is its only client (crypto handoff §6).
   signer:
-    build: ./repos/sigil-crypto
+    build: ./crypto
     image: sigil-signer:local
     environment:
       SIGNER_HMAC_SECRET: ${CRYPTO_HMAC_SECRET}

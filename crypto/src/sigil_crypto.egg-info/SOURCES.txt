@@ -1,7 +1,0 @@
-pyproject.toml
-src/sigil_crypto.egg-info/PKG-INFO
-src/sigil_crypto.egg-info/SOURCES.txt
-src/sigil_crypto.egg-info/dependency_links.txt
-src/sigil_crypto.egg-info/requires.txt
-src/sigil_crypto.egg-info/top_level.txt
-src/signer/__init__.py

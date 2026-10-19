@@ -6,15 +6,15 @@
 > invent: use the decision in §15, or add an entry there and ask a human.
 
 - Project: FinTechathon 2026 entry (theme: AI as a Financial Participant)
-- Version: 2.3.1 (see §19)
+- Version: 2.4 (see §19)
 - Security weighs 30% of judging. Requirements tagged `SEC-xx` (§13) are non-negotiable.
 
 ---
 
 ## 0. Where each fact lives
 
-The docs in this repo (`sigil-gateway`) are the source of truth for the whole project. Each
-fact is written down in exactly one place:
+The docs in `gateway/` (this folder of the Sigil monorepo) are the source of truth for the
+whole project. Each fact is written down in exactly one place:
 
 | Topic | Source of truth |
 |---|---|
@@ -39,7 +39,7 @@ disagrees with them, the sources win; fix the handoff.
 
 **The agent contract is shared.** `src/gateway/contracts/agent.py` is a verbatim copy of the
 agent layer's `contracts.py`; a parity test fails if they differ. A change is agreed with
-Alwin, then lands in both repos and in this repo's docs together.
+Alwin, then lands in both folders and in these docs together, in one commit.
 
 ---
 
@@ -85,12 +85,12 @@ allowed, to anyone other than the dependent.
 
 Sigil is four services that talk over HTTP.
 
-| Layer | Owner | Repo | Responsibility |
+| Layer | Owner | Folder | Responsibility |
 |---|---|---|---|
 | App | Shine | — | Native iOS app for guardians and dependents: Phantom sign-in and signing, chat, in-app receipt camera |
-| Agent | Alwin | `Team-Sigil/agent-layer` | Maker, Auditor, scheduler. Reads and acts only through the gateway's platform API |
-| **Gateway** | Julian | `Team-Sigil/sigil-gateway` (this repo) | App API, platform API, policy engine, database, audit log, crypto client |
-| Crypto | Han | — | Signer holding the agent wallet key; delegation reads; `transfer_checked` on Solana devnet; devnet scripts |
+| Agent | Alwin | `agent/` | Maker, Auditor, scheduler. Reads and acts only through the gateway's platform API |
+| **Gateway** | Julian | `gateway/` (these docs) | App API, platform API, policy engine, database, audit log, crypto client |
+| Crypto | Han | `crypto/` | Signer holding the agent wallet key; delegation reads; `transfer_checked` on Solana devnet; devnet scripts |
 
 ```
 iOS app (untrusted) ──HTTPS, JWT──▶ Gateway: App API
@@ -357,7 +357,7 @@ Startup: refuse unless `SOLANA_RPC_URL` contains `devnet` (SEC-14). The key come
 
 ## 10. Agent layer requirements
 
-Implemented in `Team-Sigil/agent-layer`; guide: [docs/agent-handoff.md](docs/agent-handoff.md).
+Implemented in `agent/`; guide: [docs/agent-handoff.md](docs/agent-handoff.md).
 
 - **Maker:** judges each request (send full or partial, counter-offer, ask for proof, ask
   the guardian, decline), sends the allowance, runs the policy interview, writes the weekly
@@ -418,7 +418,7 @@ The gateway owns the database (tables: README "Data").
 |---|---|---|---|
 | SEC-01 | LLM output never selects a recipient; no tool or platform payload has an address field | agent, gateway | gateway tested |
 | SEC-02 | Every transfer passes the policy engine; no other code path calls the signer | gateway | tested |
-| SEC-03 | The signer independently checks HMAC, registered destination **and source**, its own caps and the delegation | crypto | tested (sigil-crypto) |
+| SEC-03 | The signer independently checks HMAC, registered destination **and source**, its own caps and the delegation | crypto | tested (`crypto/`) |
 | SEC-04 | A policy is enforced only with the guardian's signature over its hash and version | gateway | tested |
 | SEC-05 | Guardian approvals and overrides only via verified signature; chat claims ignored | gateway, agent | gateway tested |
 | SEC-06 | A required Auditor verdict must exist before clearing; only the Auditor can post one | gateway, agent | gateway tested |
@@ -428,8 +428,8 @@ The gateway owns the database (tables: README "Data").
 | SEC-10 | Role and family checks on every route; dependents can't read guidance or other families | gateway | tested |
 | SEC-11 | Rate limits, request size limits, daily dependent message quota, per-guardian LLM token budget | gateway, agent | gateway tested |
 | SEC-12 | Untrusted input delimited in prompts; injection in a proof can't exceed limits | agent | agent layer |
-| SEC-13 | Delegate key encrypted at rest, only in the signer, never logged | crypto | tested (sigil-crypto) |
-| SEC-14 | The signer refuses a non-devnet RPC | crypto | tested (sigil-crypto) |
+| SEC-13 | Delegate key encrypted at rest, only in the signer, never logged | crypto | tested (`crypto/`) |
+| SEC-14 | The signer refuses a non-devnet RPC | crypto | tested (`crypto/`) |
 | SEC-15 | Chats and proofs encrypted at rest; no personal data in on-chain memos | gateway, crypto | gateway tested |
 | SEC-16 | Append-only, hash-chained audit log that verifies end to end | gateway | tested |
 | SEC-17 | A signed freeze blocks all of the family's transfers immediately | gateway | tested |
@@ -551,3 +551,4 @@ or address fields; the commit or PR says which sections it implements.
 | 2026-10-19 | 2.2 | PDF receipts from online orders are accepted only when the shop's signature over the file verifies; an unsigned PDF is stored but never reaches the model |
 | 2026-10-19 | 2.3 | Agent contract: `Notification.dependent_id` (a guardian note about one dependent, filed under that family) and the PDF flags `issuer_signed` / `unchecked_document`. A PDF's signer must match an allowed shop name exactly (default `LAZADA EXPRESS COMPANY LIMITED`, checked against a real receipt) and its certificate must be meant for signing; BER-encoded signatures are no longer broken by padding removal |
 | 2026-10-19 | 2.3.1 | SEC-03, SEC-13 and SEC-14 marked tested: implemented and covered by tests in `sigil-crypto` |
+| 2026-10-19 | 2.4 | One monorepo (`Team-Sigil/sigil`): `gateway/`, `agent/` and `crypto/` with their full history, and the stack scripts at the root. Each layer keeps its own package, lockfile, Dockerfile and tests |

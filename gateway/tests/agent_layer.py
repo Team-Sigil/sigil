@@ -1,6 +1,6 @@
 """Where the agent layer's source is, for the parity and end-to-end tests.
 
-`AGENT_LAYER_SRC` points at its `src/` directory (default: a sibling `agent-layer` checkout).
+`AGENT_LAYER_SRC` points at its `src/` directory (default: the monorepo's `agent/src`).
 Locally a missing agent layer skips those tests; with `CI` set it fails them, so a pipeline
 can never pass without actually checking the contract.
 """
@@ -13,7 +13,7 @@ from types import ModuleType
 
 import pytest
 
-DEFAULT_SRC = Path(__file__).resolve().parents[2] / "agent-layer" / "src"
+DEFAULT_SRC = Path(__file__).resolve().parents[2] / "agent" / "src"
 
 
 def agent_layer_src() -> Path:

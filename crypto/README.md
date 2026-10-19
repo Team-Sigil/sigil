@@ -1,11 +1,11 @@
-# sigil-crypto
+# Crypto layer (signer)
 
 The crypto layer of Sigil: the **signer**. It holds the agent wallet's key, answers
 delegation reads, and sends cleared aUSD transfers on Solana **devnet** as the delegate of
 the guardian's reservoir. It re-checks every transfer on its own, so even a compromised
 gateway can't send money to the wrong place, from the wrong reservoir, or beyond its caps.
 
-The source of truth is the gateway repo: `SPEC.md` §9 and §13, README "Crypto layer
+The source of truth is `../gateway`: `SPEC.md` §9 and §13, README "Crypto layer
 contract" and `docs/crypto-handoff.md`. `src/signer/contracts.py` is a verbatim copy of the
 gateway's `contracts/crypto.py`; `tests/test_contracts.py` fails if they drift.
 
@@ -77,7 +77,7 @@ Docker: `docker compose up -d --build` (port on `127.0.0.1` only, ledger on a vo
 `DATABASE_URL_READONLY` to `host.docker.internal:5432` inside the container).
 
 **Against the gateway** (handoff §8): run the signer on `127.0.0.1:8300`,
-`docker compose stop mock-crypto` in the gateway repo, set
+`docker compose stop mock-crypto` in `../gateway`, set
 `GATEWAY_CRYPTO_URL=http://host.docker.internal:8300` in the gateway's `.env`, and restart
 its gateway container. `SIGNER_HMAC_SECRET` must equal the gateway's `CRYPTO_HMAC_SECRET`.
 

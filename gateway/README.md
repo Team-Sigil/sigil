@@ -15,8 +15,8 @@ Sigil is four services that talk over HTTP:
 | Layer | Owner | What it does |
 |---|---|---|
 | App | Shine | Native iOS app for guardians and dependents, Phantom wallet, signing UX |
-| Agent | Alwin | Maker agent, Auditor agent, scheduler ([agent-layer](https://github.com/Team-Sigil/agent-layer)) |
-| **Gateway (this repo)** | Julian | Everything between the other three, and the only place money decisions are made |
+| Agent | Alwin | Maker agent, Auditor agent, scheduler ([`agent/`](../agent)) |
+| **Gateway (this folder)** | Julian | Everything between the other three, and the only place money decisions are made |
 | Crypto | Han | Signer holding the delegate key; signs `transfer_checked` on Solana devnet |
 
 ## Responsibilities
@@ -46,7 +46,7 @@ flowchart LR
     AG["Agent layer (Alwin)<br/>maker, Auditor, scheduler"]
     CR["Crypto layer (Han)<br/>signer, Solana devnet"]
 
-    subgraph GW["Gateway (this repo)"]
+    subgraph GW["Gateway (this folder)"]
         direction TB
         PUB["App API<br/>/api/v1/*  (JWT)"]
         PLAT["Platform API<br/>/agent/v1/*  (maker / Auditor tokens)"]
@@ -396,10 +396,10 @@ message, proof and answer calls.
 ## Platform API (for the agent layer)
 
 Served under `/agent/v1`. The shapes are `contracts/agent.py`, a verbatim copy of the agent
-layer's `contracts.py` (changes are agreed with Alwin and land in both repos). A test
-compares their JSON schemas whenever the agent layer is checked out next to this repo, and
-another drives the gateway with the agent layer's own `MakerAPI` and `AuditorAPI` over real
-HTTP. Agent layer guide: [docs/agent-handoff.md](docs/agent-handoff.md).
+layer's `contracts.py` (changes are agreed with Alwin and land in both folders). A test
+compares their JSON schemas with the agent layer in `../agent`, and another drives the
+gateway with the agent layer's own `MakerAPI` and `AuditorAPI` over real HTTP. Agent layer
+guide: [docs/agent-handoff.md](docs/agent-handoff.md).
 
 | Method | Path | Token |
 |---|---|---|
@@ -558,14 +558,14 @@ curl localhost:8000/healthz       # {"ok": true}
 | `gateway` | 8000 | This service, as the least-privileged app role and a non-root user |
 
 The gateway reaches the agent layer at `GATEWAY_AGENT_URL` (default: port 8100 on the host).
-With the agent layer checked out next to this repo, run it against the gateway (it calls
+To run the agent layer (`../agent`) against this gateway on its own (it calls
 Claude, so it also needs `ANTHROPIC_API_KEY`):
 
 ```bash
-cd ../agent-layer
+cd ../agent
 uv venv && uv pip install -e ".[dev]"   # first time only
 env PLATFORM_API_URL=http://127.0.0.1:8000 ANTHROPIC_API_KEY=sk-ant-... \
-    uv run --env-file ../sigil-gateway/.env python -m agent_layer      # agent on :8100
+    uv run --env-file ../gateway/.env python -m agent_layer      # agent on :8100
 ```
 
 Reading the gateway's `.env` gives the agent the same maker, Auditor and inbound tokens.
@@ -599,7 +599,7 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy src tests moc
 
 Tests under `tests/db/` skip themselves when the test database is unreachable. The
 agent-layer parity and end-to-end tests read the agent layer from `AGENT_LAYER_SRC` (default:
-`../agent-layer/src`); without it they skip locally but **fail when `CI` is set**, so a
+`../agent/src`); without it they skip locally but **fail when `CI` is set**, so a
 pipeline cannot pass without checking the contract.
 
 ## Configuration

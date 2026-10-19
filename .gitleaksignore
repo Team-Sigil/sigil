@@ -1,0 +1,10 @@
+# Reviewed false positives (placeholders in docs, a test-only JWT secret, idempotency keys
+# in the agent walkthrough). Add a line only after checking the finding is not a secret.
+6d3bcc8fba46006126272f3b1e80e5a7acb782bc:gateway/.env.example:generic-api-key:13
+6d3bcc8fba46006126272f3b1e80e5a7acb782bc:gateway/tests/conftest.py:generic-api-key:8
+f3ae4c05507034606a141f6481c6eb7a9f3ac36e:gateway/SPEC.md:generic-api-key:434
+a5b60cd10f9d1dfd5cbe7ac2bbc5242972cd8b69:agent/walkthrough.md:generic-api-key:232
+a5b60cd10f9d1dfd5cbe7ac2bbc5242972cd8b69:agent/walkthrough.md:generic-api-key:235
+a5b60cd10f9d1dfd5cbe7ac2bbc5242972cd8b69:agent/walkthrough.md:generic-api-key:245
+a5b60cd10f9d1dfd5cbe7ac2bbc5242972cd8b69:agent/walkthrough.md:generic-api-key:248
+a5b60cd10f9d1dfd5cbe7ac2bbc5242972cd8b69:agent/walkthrough.md:generic-api-key:260

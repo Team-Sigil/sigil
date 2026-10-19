@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Run the whole Sigil stack from this repo. See README.md.
 #
-#   ./sigil init              clone the layers, create .env with generated secrets
+#   ./sigil init              create .env with generated secrets and the agent wallet
 #   ./sigil devnet [args]     set up the aUSD mint and demo accounts on devnet
 #   ./sigil up                build and start everything
-#   ./sigil sync              update repos/ to the refs in repos.conf
-#   ./sigil link <dir>        use existing checkouts in <dir> instead of cloning
-#   ./sigil crypto <script>   run a sigil-crypto script, e.g. `crypto delegation show`
+#   ./sigil crypto <script>   run a crypto/scripts script, e.g. `crypto delegation show`
 #   ./sigil <anything else>   passed to docker compose (down, logs -f gateway, ps, ...)
 set -euo pipefail
 
@@ -15,8 +13,6 @@ ROOT=$(pwd)
 
 die() { echo "sigil: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
-
-repos() { grep -v -e '^#' -e '^[[:space:]]*$' repos.conf; }
 
 # Sets KEY=value in .env, keeping every other line.
 set_env() {
@@ -37,47 +33,12 @@ fill_env() {
 token() { openssl rand -hex 24; }
 fernet_key() { openssl rand -base64 32 | tr '+/' '-_'; }
 
-cmd_sync() {
-  mkdir -p repos
-  repos | while read -r name url ref; do
-    dir="repos/$name"
-    if [ -L "$dir" ]; then
-      info "$name: linked to $(readlink "$dir"), left as is"
-    elif [ ! -d "$dir" ]; then
-      info "$name: cloning $ref"
-      git clone --quiet "$url" "$dir"
-      git -C "$dir" checkout --quiet "$ref"
-    elif [ -n "$(git -C "$dir" status --porcelain)" ]; then
-      info "$name: local changes, not updated"
-    else
-      info "$name: updating to $ref"
-      git -C "$dir" fetch --quiet --tags origin
-      git -C "$dir" checkout --quiet "$ref"
-      if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$ref"; then
-        git -C "$dir" merge --quiet --ff-only "origin/$ref"
-      fi
-    fi
-  done
-}
-
-cmd_link() {
-  [ $# -eq 1 ] || die "usage: ./sigil link <dir containing the three repos>"
-  src=$(cd "$1" && pwd)
-  mkdir -p repos
-  repos | while read -r name _ _; do
-    [ -d "$src/$name" ] || die "$src/$name not found"
-    [ -e "repos/$name" ] && [ ! -L "repos/$name" ] && die "repos/$name exists and is not a link"
-    ln -sfn "$src/$name" "repos/$name"
-    info "$name -> $src/$name"
-  done
-}
-
 build_signer() {
   info "building the signer image"
-  docker build --quiet -t sigil-signer:local repos/sigil-crypto > /dev/null
+  docker build --quiet -t sigil-signer:local crypto > /dev/null
 }
 
-# Runs `python -m scripts.<name>` from sigil-crypto in the signer image. The scripts aren't
+# Runs `python -m scripts.<name>` from crypto/ in the signer image. The scripts aren't
 # in the image, so they are mounted; demo keypairs persist in ./devnet.
 cmd_crypto() {
   [ $# -ge 1 ] || die "usage: ./sigil crypto <script> [args]"
@@ -87,7 +48,7 @@ cmd_crypto() {
   tty=-i; [ -t 0 ] && tty=-it
   docker run --rm "$tty" \
     --user "$(id -u):$(id -g)" \
-    -v "$ROOT/repos/sigil-crypto/scripts:/app/scripts:ro" \
+    -v "$ROOT/crypto/scripts:/app/scripts:ro" \
     -v "$ROOT/devnet:/app/.devnet" \
     -e AGENT_WALLET_PUBKEY="$(get_env AGENT_WALLET_PUBKEY)" \
     -e SOLANA_RPC_URL="${rpc:-https://api.devnet.solana.com}" \
@@ -97,7 +58,6 @@ cmd_crypto() {
 cmd_init() {
   command -v docker > /dev/null || die "docker is required"
   command -v openssl > /dev/null || die "openssl is required"
-  cmd_sync
 
   [ -f .env ] || { cp .env.example .env; info "created .env"; }
   info "generating missing secrets"
@@ -114,7 +74,7 @@ cmd_init() {
   if [ -z "$(get_env AGENT_WALLET_KEY_ENC)" ]; then
     build_signer
     info "creating the agent wallet"
-    wallet=$(docker run --rm -v "$ROOT/repos/sigil-crypto/scripts:/app/scripts:ro" \
+    wallet=$(docker run --rm -v "$ROOT/crypto/scripts:/app/scripts:ro" \
       sigil-signer:local python -m scripts.new_agent_wallet)
     for key in AGENT_WALLET_PUBKEY AGENT_WALLET_KEY_ENC SIGNER_MASTER_KEY; do
       set_env "$key" "$(echo "$wallet" | sed -n "s/^$key=//p")"
@@ -162,9 +122,6 @@ cmd_devnet() {
 
 cmd_up() {
   [ -f .env ] || die "no .env: run ./sigil init first"
-  for name in $(repos | awk '{ print $1 }'); do
-    [ -d "repos/$name" ] || die "repos/$name missing: run ./sigil sync"
-  done
   missing=$(missing_model_keys)
   [ -z "$missing" ] || die "set $missing in .env (the agents' model provider needs it)"
   docker compose up -d --build --wait
@@ -175,11 +132,9 @@ cmd_up() {
 
 case "${1:-help}" in
   init) cmd_init ;;
-  sync) cmd_sync ;;
-  link) shift; cmd_link "$@" ;;
   devnet) shift; cmd_devnet "$@" ;;
   crypto) shift; cmd_crypto "$@" ;;
   up) cmd_up ;;
-  help | -h | --help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help | -h | --help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) docker compose "$@" ;;
 esac

@@ -1,14 +1,14 @@
 # CLAUDE.md
 
-This repo is the **gateway layer** of Sigil, owned by Julian, and its docs are the **single
+This folder is the **gateway layer** of Sigil, owned by Julian, and its docs are the **single
 source of truth for the whole project**. Sigil is four services that talk over HTTP:
 
-| Layer | Owner | Repo |
+| Layer | Owner | Folder |
 |---|---|---|
-| App (native iOS) | Shine | — |
-| Agent (maker, Auditor, scheduler) | Alwin | `Team-Sigil/agent-layer` |
-| Gateway (this repo: app API, platform API, policy engine, DB) | Julian | `Team-Sigil/sigil-gateway` |
-| Crypto (signer, Solana devnet) | Han | — |
+| App (native iOS) | Shine | — (separate repo) |
+| Agent (maker, Auditor, scheduler) | Alwin | `agent/` |
+| Gateway (this folder: app API, platform API, policy engine, DB) | Julian | `gateway/` |
+| Crypto (signer, Solana devnet) | Han | `crypto/` |
 
 ## Sources of truth
 
@@ -28,7 +28,7 @@ SPEC.md §0 says where each fact lives. In short:
 
 ## Working rules
 
-- Stay inside this repo. A change to another layer's contract needs that owner's OK, and
+- Stay inside `gateway/`. A change to another layer's contract needs that owner's OK, and
   lands here together with its docs in a `[SPEC]` commit.
 - Never weaken a `SEC-xx` requirement (SPEC §13). If one blocks you, stop and ask a human.
 - Money is integer base units (6 decimals), never floats.

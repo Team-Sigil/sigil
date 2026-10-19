@@ -34,7 +34,7 @@ services:
         condition: service_healthy
 
   # In-memory stand-in for the crypto layer, for local runs. The real signer
-  # (Team-Sigil/sigil-crypto) runs with the whole stack from Team-Sigil/sigil-infra.
+  # (crypto/) runs with the whole stack from the repo root (./sigil up).
   mock-crypto:
     build: .
     command: ["python", "-m", "mock_crypto"]

@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Gateway against a real Postgres (roles from gateway/infra/postgres/init-roles.sh), then the
+  # signer's registry tests against the schema the gateway's migrations created.
+  gateway:
+    runs-on: ubuntu-latest
+    env:
+      CI: "1"
+      TEST_DATABASE_URL: postgresql+psycopg://sigil_app:apppw@localhost:5432/sigil_test
+      TEST_DATABASE_URL_MIGRATIONS: postgresql+psycopg://sigil_owner:ownerpw@localhost:5432/sigil_test
+      SIGIL_SIGNER_RO_PASSWORD: ropw
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start Postgres
+        run: |
+          docker run -d --name testdb -p 127.0.0.1:5432:5432 \
+            -e POSTGRES_DB=sigil -e POSTGRES_USER=sigil_owner -e POSTGRES_PASSWORD=ownerpw \
+            -e SIGIL_APP_PASSWORD=apppw -e SIGIL_SIGNER_RO_PASSWORD=ropw \
+            -v "$PWD/gateway/infra/postgres/init-roles.sh:/docker-entrypoint-initdb.d/01-init-roles.sh:ro" \
+            postgres:16
+          for i in $(seq 60); do
+            docker exec testdb psql -U sigil_owner -d sigil_test -c 'select 1' > /dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          docker logs testdb; exit 1
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Gateway lint and types
+        working-directory: gateway
+        run: |
+          uv sync --extra dev
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy src tests mock_crypto
+      - name: Gateway tests
+        working-directory: gateway
+        run: uv run pytest
+      - name: Signer registry tests (gateway schema)
+        working-directory: crypto
+        env:
+          SIGNER_TEST_DATABASE_URL_READONLY: postgresql://sigil_signer_ro:ropw@localhost:5432/sigil_test
+        run: |
+          uv sync --extra dev
+          uv run pytest tests/test_registry.py
+
+  crypto:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crypto
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src tests scripts
+      - run: uv run pytest
+
+  agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv venv && uv pip install -e ".[dev]"
+      - run: uv run pytest
+
+  # SEC-18: no secrets in the repository, across the whole history.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.18.4 detect --source /repo --no-banner --redact -v
