@@ -102,7 +102,13 @@ uv run python -m scripts.setup_devnet --guardian <Phantom wallet>  # guardian ap
 uv run python -m scripts.delegation show
 uv run python -m scripts.delegation revoke      # attack demo 4: next transfer → INSUFFICIENT_DELEGATION
 uv run python -m scripts.delegation approve 500
+uv run python -m scripts.token_metadata set     # name the mint, so wallets show "aUSD"
 ```
+
+`token_metadata` writes a Metaplex Token Metadata account (name "Sigil aUSD", symbol `aUSD`)
+for the mint, signed by the setup payer, which is the mint authority. Without it, wallets
+such as Phantom list aUSD as "Unknown Token". It is display only: the signer and the gateway
+always identify aUSD by its mint address. From the repo root: `./sigil crypto token_metadata set`.
 
 `setup_devnet` is idempotent. It keeps throwaway demo keypairs in `.devnet/` (git-ignored,
 solana-keygen format) and writes the addresses the gateway needs to `.devnet/seed.json`

@@ -6,6 +6,7 @@ only encrypted, in AGENT_WALLET_KEY_ENC.
 """
 
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -33,6 +34,12 @@ class DevnetRpc(SolanaRpc):
     async def account_exists(self, pubkey: Pubkey) -> bool:
         result = await self._call("getAccountInfo", [str(pubkey), {"encoding": "base64"}])
         return result["value"] is not None
+
+    async def get_account_data(self, pubkey: Pubkey) -> bytes | None:
+        result = await self._call("getAccountInfo", [str(pubkey), {"encoding": "base64"}])
+        if result["value"] is None:
+            return None
+        return base64.b64decode(result["value"]["data"][0])
 
     async def get_balance(self, pubkey: Pubkey) -> int:
         result = await self._call("getBalance", [str(pubkey), {"commitment": "confirmed"}])
