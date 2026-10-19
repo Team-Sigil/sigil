@@ -112,7 +112,7 @@ loads and verifies the facts and runs the money transaction around it.
 | 6 | The category is not blocked | `blocked category` |
 | 7 | Request: amount ≤ `max_per_request`. Allowance: amount ≤ the signed allowance, `request_id` empty, key = `allowance:{dependent}:{ISO week}` | `over max per request` / `over allowance` / `invalid allowance` / `no allowance in policy` |
 | 8 | spent + reserved + amount ≤ `weekly_cap` | `over weekly cap` |
-| 9 | amount ≤ on-chain delegation − reserved; the delegate is the agent wallet **and the token account is owned by the guardian** | `insufficient delegation` |
+| 9 | amount ≤ on-chain delegation − money pending from the same reservoir (all of the guardian's dependents); the delegate is the agent wallet **and the token account is owned by the guardian** | `insufficient delegation` |
 | 10 | Request: exists, belongs to the dependent, has an amount, and amount ≤ `amount_requested − already_sent − pending` (money cleared but not yet confirmed may still go out) | `unknown request` / `no amount requested` / `over requested amount` |
 | 11 | If the review rule fires: an unused `agree` verdict bound to this idempotency key, amount, category and dependent | `auditor verdict required` / `auditor verdict invalid` |
 | 12 | Proofs belong to this request; at or above the proof threshold, an unused image or OCR proof (not typed, not a duplicate) whose findings match and cover the amount | `unknown proof` / `proof not for this request` / `proof required` / `proof already used` / `proof does not cover the transfer` |
@@ -135,8 +135,10 @@ it needs the guardian.
 
 1. A known idempotency key returns its stored result: `duplicate` if sent, the same reason
    if blocked, and a pending transfer is retried (the crypto layer is idempotent on the key).
-2. The delegation is read from the crypto layer, then the family's budget row for the week
-   is locked (`SELECT … FOR UPDATE`) and every fact is loaded and verified.
+2. The delegation is read from the crypto layer. Then the reservoir is locked (an advisory
+   lock on the guardian's token account, shared by all of their dependents), then the
+   family's budget row for the week (`SELECT … FOR UPDATE`), and every fact is loaded and
+   verified.
 3. Blocked: the decision is stored and logged. Cleared: the amount is reserved, the verdict
    and proof keys are spent, a pending transfer is stored, all in one commit.
 4. The crypto layer is called outside any lock. **Confirmed:** reserved → spent,
@@ -156,10 +158,10 @@ it needs the guardian.
 | SEC-05 | Guardian approvals count only as wallet signatures over decision, amount and nonce | `app_api/guardian.py`, `engine/transfers.py` | forged and wrong-amount approvals |
 | SEC-06 | A transfer that needs review cannot clear without a matching, unused Auditor verdict; only the Auditor token can post one | `engine/checks.py`, `agent_api/auth.py` | skip-audit, verdict reuse, maker posting a verdict |
 | SEC-07 | One idempotency key, at most one transfer, including retries and crashes | `engine/transfers.py`, unique key | replay test, pending retry |
-| SEC-08 | Budget updates under a row lock in one transaction | `engine/transfers.py` | two parallel transfers over the cap |
+| SEC-08 | Budget updates under a row lock in one transaction; a reservoir lock across a guardian's dependents | `engine/transfers.py` | two parallel transfers over the cap; two dependents racing for one delegation |
 | SEC-09 | SIWS: single-use 5-minute nonces bound to wallet, purpose and domain; JWT ≤ 12 h | `app_api/auth.py`, `app_api/nonces.py` | replay, other domain, wrong key, expiry, wrong purpose |
 | SEC-10 | Role and family checked on every route; dependents never see guidance; other families get 404 | `app_api/sessions.py` | role and cross-family tests |
-| SEC-11 | Rate limits, body size limits, per-family LLM token budget | `protection.py`, `agent_api/` | 413, streamed 413, 429, usage |
+| SEC-11 | Rate limits, body size limits, per-guardian LLM token budget | `protection.py`, `agent_api/` | 413, streamed 413, 429, usage |
 | SEC-15 | Request messages, thread, proofs, notifications and agent replies encrypted at rest (Fernet) | `db/models.py` | raw-bytes tests |
 | SEC-16 | Append-only, hash-chained audit log; a trigger blocks edits even by the owner | `db/audit_log.py`, migration | tamper detection, permissions |
 | SEC-17 | Signed freeze blocks every transfer immediately | `app_api/guardian.py`, engine check 2 | freeze and unfreeze |
@@ -181,13 +183,21 @@ Base path `/api/v1`. JSON unless noted. Money is **integer base units** (aUSD ha
 decimals: `12500000` = 12.50). Every route except `/auth/*` needs `Authorization: Bearer
 <token>`.
 
+**Several dependents.** A guardian may support several dependents; each has their own
+family (policy, budget, freeze, questions, interview, history, audit trail). A dependent has
+exactly one guardian. Family-scoped routes act on the family named in the `X-Family-Id`
+header; a guardian with one family may leave it out, and a guardian with several gets
+`400 FAMILY_REQUIRED` without it. A family the caller doesn't belong to is `404`. All of a
+guardian's dependents draw on one reservoir (one token account, one delegation).
+
 | Method | Path | Who | Body → response |
 |---|---|---|---|
 | POST | `/auth/nonce` | anyone | `{wallet, purpose}` → `{nonce, message, expires_at}`; `message` is the exact sign-in text for `purpose: "login"` |
-| POST | `/auth/verify` | anyone | `{wallet, message, signature_b58}` → `{token, role, family_id}` |
-| GET | `/me` | any session | `{user_id, wallet, role, family_id, display_name, locale}` |
-| POST | `/families` | guardian without a family | `{dependent_wallet, dependent_token_account, guardian_token_account, timezone?, dependent_name?, guardian_locale?, dependent_locale?, nonce, registration_signature_b58}` → `{family, token}` (use the new token) |
-| GET | `/family` | member | family |
+| POST | `/auth/verify` | anyone | `{wallet, message, signature_b58}` → `{token, role, family_id, family_ids}` (`family_id` only when there is exactly one) |
+| GET | `/me` | any session | `{user_id, wallet, role, family_id, family_ids, display_name, locale}` |
+| POST | `/families` | guardian (add a dependent) | `{dependent_wallet, dependent_token_account, guardian_token_account, timezone?, dependent_name?, guardian_locale?, dependent_locale?, nonce, registration_signature_b58}` → `{family, token}` (use the new token) |
+| GET | `/families` | any session | a guardian's families, oldest first (a dependent: their own) |
+| GET | `/family` | member | the selected family |
 | POST | `/policy/interview` | guardian | `{message?}` → `{status, phase, question, question_kind, checklist, progress, agent_draft, validation, draft, turns_used, max_turns}`; no message starts the interview |
 | GET | `/policy/interview` | guardian | the open (or latest) interview: `{interview_id, status, turns, draft_policy_id}` |
 | DELETE | `/policy/interview` | guardian | start over (the open interview is abandoned) |
@@ -210,7 +220,7 @@ decimals: `12500000` = 12.50). Every route except `/auth/*` needs `Authorization
 | POST | `/freeze` | guardian | `{frozen, nonce, signature_b58}` → `{frozen}` |
 | GET | `/budget` | member | `{week_start, spent, reserved, weekly_cap, remaining, delegated_remaining}` (`null` if the chain cannot be read) |
 | GET | `/history` | member | `{items, transfers}` with transaction signatures |
-| GET | `/notifications`; POST `/notifications/{id}/read` | recipient | the caller's notifications |
+| GET | `/notifications`; POST `/notifications/{id}/read` | recipient | the caller's notifications across all families, each with `family_id` (`null`: about all of a guardian's dependents); no `X-Family-Id` needed |
 | GET | `/audit` | guardian | `{entries, chain_valid}`, verified on every read |
 | GET | `/events` | member | Server-Sent Events: `message`, `question`, `transfer`, `notification` |
 
@@ -353,7 +363,9 @@ repo, and another drives the gateway with the agent layer's own `MakerAPI` and
 | POST | `/auditor/verdicts` | **Auditor only** |
 
 Ids: a dependent is the dependent's user id, a guardian (and the agent's `family_id` for
-usage) is the guardian's user id; requests and proofs are their UUIDs.
+usage) is the guardian's user id; requests and proofs are their UUIDs. A guardian may have
+several dependents: token usage is counted per guardian across all of them, guardian
+answers list every dependent's, and a guardian notification is guardian-wide.
 
 What the gateway adds or does differently from the agent layer's mock engine (all
 stricter):
@@ -383,7 +395,8 @@ stricter):
 - **Guardian answers** appear in the request thread as `guardian_answer` messages (fixes
   gap 4); the agent's reply to each decision is added as an `agent` message.
 - **Context**: reserved money counts as spent; delegation counts only on the guardian's own
-  token account with the agent wallet as delegate.
+  token account with the agent wallet as delegate, minus money pending for any of the
+  guardian's dependents (they share the reservoir).
 - **Camera-only proofs** (`CAMERA_ONLY_PROOFS`) mirror the agent layer's
   `AGENT_CAMERA_ONLY_PROOFS`: only verified photos, or OCR text read from one on the same
   request, count as proof. Turn both on together.
