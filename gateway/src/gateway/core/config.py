@@ -50,7 +50,9 @@ class Settings(BaseSettings):
     # PDF ever counts. PEM file holding the issuing certificate(s), and a comma-separated
     # list of accepted signer names.
     pdf_trusted_roots_path: Path | None = None
-    pdf_allowed_signers: str = "Lazada"
+    # The organisation on Lazada Thailand's receipt-signing certificate (checked against a
+    # real receipt, issued by Thai Digital ID CA G3). Exact names, comma-separated.
+    pdf_allowed_signers: str = "LAZADA EXPRESS COMPANY LIMITED"
 
     @property
     def allowed_pdf_signers(self) -> list[str]:

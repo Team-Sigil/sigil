@@ -327,8 +327,15 @@ any of the guardian's dependents), `near_duplicate` (perceptually the same pictu
 shop's own signature over it. At upload the gateway verifies any embedded signature
 (`proof_pdf.py`): the `/ByteRange` must cover the whole file but the signature's own hole,
 the signed digest must match the bytes, the signing certificate must chain to one of
-`PDF_TRUSTED_ROOTS_PATH` and must be in date, and its name must match
-`PDF_ALLOWED_SIGNERS` (Lazada today). A PDF that passes is flagged `issuer_signed` and is
+`PDF_TRUSTED_ROOTS_PATH`, be in date now, and be meant for signing (its key usage and
+extended key usage, when present, must allow document signatures), and its organisation
+(or common name) must **exactly** match a name on `PDF_ALLOWED_SIGNERS` (Lazada today), so
+"Not Lazada Ltd" is refused. Checked against a real Lazada Thailand receipt: the signer is
+`LAZADA EXPRESS COMPANY LIMITED` (the default), issued by **Thai Digital ID CA G3**, under
+Thailand's ETDA root. Since the chain check is one level, `PDF_TRUSTED_ROOTS_PATH` must hold
+the Thai Digital ID CA G3 certificate, downloaded from Thai Digital ID or ETDA and checked by
+fingerprint (never taken from a PDF, which can carry any certificate). Lazada's signatures
+use BER indefinite lengths, so they end in zero bytes; the verifier must not strip them. A PDF that passes is flagged `issuer_signed` and is
 evidence like a photo; one that does not is flagged `unchecked_document`, **is never shown
 to the model** and settles no obligation. With no roots configured, no PDF counts. A valid
 signature proves the file came from that shop unchanged — not that the order is this
@@ -414,7 +421,9 @@ $AGENT_INBOUND_TOKEN`):
 Ids: a dependent is the dependent's user id, a guardian (and the agent's `family_id` for
 usage) is the guardian's user id; requests and proofs are their UUIDs. A guardian may have
 several dependents: token usage is counted per guardian across all of them, guardian
-answers list every dependent's, and a guardian notification is guardian-wide.
+answers list every dependent's, and a guardian notification is guardian-wide unless it
+names a `dependent_id`: then it is filed under that dependent's family, which must be the
+guardian's (`404` otherwise; `400` on a note to a dependent).
 
 What the gateway adds or does differently from the agent layer's mock engine (all
 stricter):

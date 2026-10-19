@@ -6,7 +6,7 @@
 > invent: use the decision in §15, or add an entry there and ask a human.
 
 - Project: FinTechathon 2026 entry (theme: AI as a Financial Participant)
-- Version: 2.2 (see §19)
+- Version: 2.3 (see §19)
 - Security weighs 30% of judging. Requirements tagged `SEC-xx` (§13) are non-negotiable.
 
 ---
@@ -549,3 +549,4 @@ or address fields; the commit or PR says which sections it implements.
 | 2026-10-19 | 2.0 | Rewritten for the four-service split. This repo's docs are the project's single source of truth (§0). The policy schema, categories, outcomes, interfaces, engine, data model and agent behaviour now match what is built; signer idempotency comes before its caps; sign-in uses `signMessage`; the SEC table has owners and status |
 | 2026-10-19 | 2.1 | Proof comes after payment: a request at or above `proof_threshold` is sent first and owes a receipt, which blocks further requests until settled; PDF receipts accepted for online orders (not yet checked) |
 | 2026-10-19 | 2.2 | PDF receipts from online orders are accepted only when the shop's signature over the file verifies; an unsigned PDF is stored but never reaches the model |
+| 2026-10-19 | 2.3 | Agent contract: `Notification.dependent_id` (a guardian note about one dependent, filed under that family) and the PDF flags `issuer_signed` / `unchecked_document`. A PDF's signer must match an allowed shop name exactly (default `LAZADA EXPRESS COMPANY LIMITED`, checked against a real receipt) and its certificate must be meant for signing; BER-encoded signatures are no longer broken by padding removal |

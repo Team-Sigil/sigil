@@ -8,8 +8,12 @@ trust, and has it changed since?**
 What a good answer proves:
 
 - the bytes have not changed since they were signed (the signed digest covers them);
-- the signing certificate chains to a root we were configured to trust;
-- the certificate belongs to an issuer on the allowlist (Lazada today).
+- the signing certificate chains to a root we were configured to trust, and is meant for
+  signing documents (its key usage and extended key usage, when present, allow it);
+- the certificate's organisation (or, without one, its common name) is exactly a name on
+  the allowlist (Lazada today), not merely contains it;
+- the certificate is valid now. Its validity at signing time isn't checked: the signing
+  time in the signature is supplied by the signer, so it can't be relied on.
 
 What it does **not** prove: that the order is this dependent's, that it is for the amount
 asked for, or that it was not forwarded by someone else. The agent still reads the merchant,
@@ -29,8 +33,27 @@ from asn1crypto import x509 as asn1_x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
-from cryptography.x509 import Certificate, load_der_x509_certificate
-from cryptography.x509.oid import NameOID
+from cryptography.x509 import (
+    Certificate,
+    ExtendedKeyUsage,
+    ExtensionNotFound,
+    KeyUsage,
+    ObjectIdentifier,
+    load_der_x509_certificate,
+)
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+# Extended key usages that mean "may sign documents". A certificate restricted to anything
+# else (a TLS server or client certificate, code signing) must not sign a receipt.
+DOCUMENT_SIGNING_EKUS = frozenset(
+    {
+        ObjectIdentifier("1.3.6.1.5.5.7.3.36"),  # id-kp-documentSigning (RFC 9336)
+        ObjectIdentifier("1.3.6.1.4.1.311.10.3.12"),  # Microsoft document signing
+        ObjectIdentifier("1.2.840.113583.1.1.5"),  # Adobe Authentic Documents Trust
+        ExtendedKeyUsageOID.EMAIL_PROTECTION,  # S/MIME, which many document certificates use
+        ExtendedKeyUsageOID.ANY_EXTENDED_KEY_USAGE,
+    }
+)
 
 # A signature dictionary names the ranges it covers and carries the CMS blob between them.
 BYTE_RANGE = re.compile(rb"/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]")
@@ -64,9 +87,10 @@ def verify(
 ) -> SignedPdf:
     """Verify an embedded PDF signature, or raise `PdfSignatureError`.
 
-    `allowed_signers` are matched case-insensitively against the signing certificate's
-    organisation and common name, so a receipt signed by someone else is refused even when
-    its certificate is otherwise valid.
+    `allowed_signers` are exact names, matched case-insensitively against the signing
+    certificate's organisation (or its common name when it has none), so a receipt signed by
+    someone else, including "Not Lazada Ltd", is refused even when its certificate is
+    otherwise valid.
     """
     signed_bytes, signature_der = _extract(pdf)
     signed_data = _signed_data(signature_der)
@@ -76,6 +100,7 @@ def verify(
     _check_digest(signer_info, signed_bytes)
     _check_signature(signer_info, certificate)
     _check_validity(certificate)
+    _check_usage(certificate)
     _check_chain(certificate, trusted_roots)
     name = _signer_name(certificate)
     if not _allowed(name, allowed_signers):
@@ -112,7 +137,10 @@ def _extract(pdf: bytes) -> tuple[bytes, bytes]:
         signature = bytes.fromhex(re.sub(rb"\s", b"", contents.group(1)).decode("ascii"))
     except ValueError as exc:
         raise PdfSignatureError("the signature is not valid hex") from exc
-    return signed, signature.rstrip(b"\x00")
+    # Not stripped: the hole is padded with zeros after the signature, but a BER signature
+    # with indefinite lengths (as Lazada's are) ends in 00 00 end-of-content markers, and
+    # stripping those breaks it. The parser ignores the padding after the signature.
+    return signed, signature
 
 
 def _signed_data(der: bytes) -> cms.SignedData:
@@ -207,6 +235,23 @@ def _check_validity(certificate: Certificate, now: datetime | None = None) -> No
         raise PdfSignatureError("the signing certificate is expired or not yet valid")
 
 
+def _check_usage(certificate: Certificate) -> None:
+    """The certificate must be meant for signing. When it states a key usage, that must
+    include a signature; when it states extended key usages, one must allow documents."""
+    try:
+        usage = certificate.extensions.get_extension_for_class(KeyUsage).value
+    except ExtensionNotFound:
+        usage = None
+    if usage is not None and not (usage.digital_signature or usage.content_commitment):
+        raise PdfSignatureError("the signing certificate's key usage doesn't allow signatures")
+    try:
+        extended = certificate.extensions.get_extension_for_class(ExtendedKeyUsage).value
+    except ExtensionNotFound:
+        return
+    if not set(extended) & DOCUMENT_SIGNING_EKUS:
+        raise PdfSignatureError("the signing certificate isn't meant for signing documents")
+
+
 def _check_chain(certificate: Certificate, trusted_roots: list[Certificate]) -> None:
     """The signer must be issued by a root we were told to trust.
 
@@ -254,8 +299,11 @@ def _signer_name(certificate: Certificate) -> str:
 
 
 def _allowed(name: str, allowed_signers: list[str]) -> bool:
-    folded = name.casefold()
-    return any(allowed.casefold() in folded for allowed in allowed_signers if allowed)
+    """An exact name, not a substring: "lazada" in "Not Lazada Ltd" would let anyone the
+    trusted CA certifies with that word in their name sign receipts."""
+    folded = name.strip().casefold()
+    accepted = {allowed.strip().casefold() for allowed in allowed_signers} - {""}
+    return folded in accepted
 
 
 def _signing_time(signer: cms.SignerInfo) -> datetime | None:

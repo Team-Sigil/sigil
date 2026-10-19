@@ -46,6 +46,10 @@ reorder or pick by dict order).
 
 ## Proposal A (optional contract addition): `dependent_id` on guardian notifications
 
+> **Accepted and implemented** (2026-10-19). The agent sets it on the weekly summary and on
+> `notify_guardian`; the gateway files such a note under that dependent's family and refuses
+> a dependent that isn't the guardian's. The text below is the original proposal.
+
 Some guardian notes are about one dependent: the weekly summary (`weekly_summary` in
 `flows/scheduled.py`) and the maker's `notify_guardian` tool (`maker/agent.py`). Today they
 reach the guardian without saying which dependent they are about, so the app files them as

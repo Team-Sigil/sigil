@@ -225,6 +225,51 @@ class TestPlatformApi:
         listed = (await app_client.get("/api/v1/notifications", headers=headers)).json()
         assert [(n["id"], n["family_id"]) for n in listed] == [(sent.json()["id"], None)]
 
+    async def test_a_note_about_one_dependent_is_filed_under_their_family(
+        self, app_client: httpx.AsyncClient, world: World
+    ) -> None:
+        """Agent handoff proposal A: the weekly summary names the dependent it's about."""
+        await world.sibling()
+        note = {
+            "audience": "guardian",
+            "recipient_id": str(world.family.guardian_user_id),
+            "message": "Mali's week: 30.00 on school supplies.",
+            "dedupe_key": None,
+            "dependent_id": str(world.family.dependent_user_id),
+        }
+        sent = await app_client.post("/agent/v1/notifications", headers=MAKER, json=note)
+        assert sent.status_code == 200, sent.text
+
+        headers = await login(app_client, world.guardian_key)
+        listed = (await app_client.get("/api/v1/notifications", headers=headers)).json()
+        assert [(n["id"], n["family_id"]) for n in listed] == [
+            (sent.json()["id"], str(world.family.id))
+        ]
+
+    async def test_a_note_about_someone_elses_dependent_is_refused(
+        self, app_client: httpx.AsyncClient, world: World
+    ) -> None:
+        note = {
+            "audience": "guardian",
+            "recipient_id": str(world.family.dependent_user_id),  # not this dependent's guardian
+            "message": "x",
+            "dependent_id": str(world.family.dependent_user_id),
+        }
+        refused = await app_client.post("/agent/v1/notifications", headers=MAKER, json=note)
+        assert refused.status_code == 404
+
+    async def test_dependent_id_is_only_for_guardian_notes(
+        self, app_client: httpx.AsyncClient, world: World
+    ) -> None:
+        note = {
+            "audience": "dependent",
+            "recipient_id": str(world.family.dependent_user_id),
+            "message": "x",
+            "dependent_id": str(world.family.dependent_user_id),
+        }
+        refused = await app_client.post("/agent/v1/notifications", headers=MAKER, json=note)
+        assert refused.status_code == 400
+
     async def test_context_counts_the_whole_reservoir(
         self, app_client: httpx.AsyncClient, world: World
     ) -> None:

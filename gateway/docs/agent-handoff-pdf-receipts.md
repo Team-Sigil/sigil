@@ -24,8 +24,10 @@ covers only how a PDF proof is read.
 - **Signature check at upload** (`proof_pdf.py`). The signed byte range must cover the whole
   file except the signature itself, the digest must match, the CMS signature must verify,
   the signing certificate must chain to a root in `PDF_TRUSTED_ROOTS_PATH` and have been
-  valid when the receipt was signed, and its organisation name must be on
-  `PDF_ALLOWED_SIGNERS`. **Only Lazada is accepted for now.**
+  valid now (the signing time in a signature is the signer's own claim, so it isn't
+  relied on), be meant for signing (key usage and extended key usage, when present), and
+  its organisation name must exactly match a name on `PDF_ALLOWED_SIGNERS`. **Only Lazada
+  is accepted for now.**
 - **Flag.** A PDF that passes gets `issuer_signed`. One that fails, for any reason, gets
   `unchecked_document`. A signature only proves that Lazada produced the file and nobody
   changed it. It doesn't prove the order is this dependent's or matches the amount asked;
@@ -87,10 +89,12 @@ day for the same total would look identical.
   dependents).
 - Image proofs, OCR proofs and typed text are unchanged.
 
-## Open question
+## Checked against a real receipt (2026-10-19)
 
-No real Lazada receipt has been checked yet. If Lazada's PDFs turn out not to be signed, or
-signed by a different organisation name, every Lazada PDF will arrive as
-`unchecked_document`. The agent's behaviour above is still right in that case (it asks for
-the original); only the gateway's trust list would need to change. If you have a Lazada
-order PDF, please send it to us.
+A real Lazada Thailand invoice is signed and verifies: the signature covers the whole file,
+the digest and signature match, and the certificate may sign. Its signer is
+`LAZADA EXPRESS COMPANY LIMITED` (now the default `PDF_ALLOWED_SIGNERS`), issued by Thai
+Digital ID CA G3 under Thailand's ETDA root; configure that CA in `PDF_TRUSTED_ROOTS_PATH`.
+Its signature is BER-encoded and ends in zero bytes, which the verifier first broke by
+stripping them as padding; fixed, with a regression test. Until the CA is configured, every
+Lazada PDF still arrives as `unchecked_document`, and the agent asks for the original.

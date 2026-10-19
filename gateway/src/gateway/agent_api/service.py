@@ -21,7 +21,7 @@ from sqlalchemy.orm import aliased
 from gateway.contracts import agent
 from gateway.contracts.crypto import CryptoClient, CryptoUnavailableError
 from gateway.contracts.policy import PolicyBody, body_from_draft, policy_view
-from gateway.core.errors import ConflictError, NotFoundError
+from gateway.core.errors import ConflictError, DomainError, NotFoundError
 from gateway.db import audit_log
 from gateway.db.models import (
     AgentEvent,
@@ -483,11 +483,17 @@ async def propose_policy_update(
 
 async def notify(session: AsyncSession, note: agent.Notification, bus: EventBus) -> agent.Receipt:
     audience = Audience(note.audience)
-    if audience == Audience.GUARDIAN:
-        # The agent names only the guardian, who may have several dependents: a
-        # guardian-wide note (e.g. "top up the shared reservoir").
+    if audience == Audience.GUARDIAN and note.dependent_id is not None:
+        # A guardian note about one dependent (the weekly summary, the maker's note): filed
+        # under that dependent's family, which must be this guardian's.
+        members = await members_by_both(session, note.recipient_id, note.dependent_id)
+        recipient, families, family_id = members.guardian, [members.family], members.family.id
+    elif audience == Audience.GUARDIAN:
+        # About all of the guardian's dependents (e.g. "top up the shared reservoir").
         recipient, families = await guardian_families(session, note.recipient_id)
         family_id = None
+    elif note.dependent_id is not None:
+        raise DomainError("dependent_id is only for notes to a guardian.")
     else:
         members = await members_by_dependent(session, note.recipient_id)
         recipient, families, family_id = members.dependent, [members.family], members.family.id

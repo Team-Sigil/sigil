@@ -57,10 +57,11 @@ def signer(
     common: str = "Lazada Order Receipts",
     not_valid_before: datetime | None = None,
     not_valid_after: datetime | None = None,
+    extensions: tuple[x509.ExtensionType, ...] = (),
 ) -> Issued:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     now = datetime.now(UTC)
-    certificate = (
+    builder = (
         x509.CertificateBuilder()
         .subject_name(_name(common, organisation))
         .issuer_name(issuer.certificate.subject)
@@ -68,9 +69,10 @@ def signer(
         .serial_number(x509.random_serial_number())
         .not_valid_before(not_valid_before or now - timedelta(days=1))
         .not_valid_after(not_valid_after or now + timedelta(days=365))
-        .sign(issuer.key, hashes.SHA256())
     )
-    return Issued(certificate, key)
+    for extension in extensions:
+        builder = builder.add_extension(extension, critical=False)
+    return Issued(builder.sign(issuer.key, hashes.SHA256()), key)
 
 
 def _cms(signed_bytes: bytes, issued: Issued) -> bytes:
@@ -129,8 +131,14 @@ def _cms(signed_bytes: bytes, issued: Issued) -> bytes:
     return der
 
 
-def build(issued: Issued, *, body: str = "Lazada order 12345  THB 520.00") -> bytes:
-    """A signed PDF. The body is plain text in the file, which is all these tests need."""
+def build(
+    issued: Issued, *, body: str = "Lazada order 12345  THB 520.00", indefinite: bool = False
+) -> bytes:
+    """A signed PDF. The body is plain text in the file, which is all these tests need.
+
+    `indefinite` encodes the signature's outer structure with a BER indefinite length, as
+    Lazada's real receipts do: it then ends in `00 00` end-of-content markers before the
+    zero padding."""
     head = b"%PDF-1.7\n% a receipt\n1 0 obj\n<< /Body (" + body.encode() + b") >>\nendobj\n"
     placeholder = b"0" * (SIGNATURE_BYTES * 2)
 
@@ -165,9 +173,19 @@ def build(issued: Issued, *, body: str = "Lazada order 12345  THB 520.00") -> by
 
     signed_bytes = laid_out[:hole_start] + laid_out[hole_end:]
     blob = _cms(signed_bytes, issued)
+    if indefinite:
+        blob = _indefinite(blob)
     assert len(blob) <= SIGNATURE_BYTES, "reserve more room for the signature"
     contents = blob.hex().encode().ljust(SIGNATURE_BYTES * 2, b"0")
     return assemble(byte_range, contents)
+
+
+def _indefinite(der: bytes) -> bytes:
+    """The outer SEQUENCE re-encoded with an indefinite length (BER)."""
+    assert der[0] == 0x30
+    length_bytes = der[1] & 0x7F if der[1] & 0x80 else 0
+    content = der[2 + length_bytes :]
+    return b"\x30\x80" + content + b"\x00\x00"
 
 
 def unsigned(body: str = "Lazada order 12345  THB 520.00") -> bytes:
