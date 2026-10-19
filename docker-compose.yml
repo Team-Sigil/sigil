@@ -61,6 +61,11 @@ services:
       RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-30}
       DEPENDENT_MESSAGES_PER_DAY: ${DEPENDENT_MESSAGES_PER_DAY:-50}
       LLM_TOKEN_BUDGET_PER_GUARDIAN_PER_DAY: ${LLM_TOKEN_BUDGET_PER_GUARDIAN_PER_DAY:-200000}
+      # Signed PDF receipts (online orders). No certificate in the file = no PDF counts.
+      PDF_TRUSTED_ROOTS_PATH: /config/pdf-trusted-roots.pem
+      PDF_ALLOWED_SIGNERS: ${PDF_ALLOWED_SIGNERS:-Lazada}
+    volumes:
+      - ./config/pdf-trusted-roots.pem:/config/pdf-trusted-roots.pem:ro
     ports:
       # GATEWAY_BIND=0.0.0.0 lets a phone on the same network reach it.
       - "${GATEWAY_BIND:-127.0.0.1}:8000:8000"
@@ -83,11 +88,21 @@ services:
       PLATFORM_MAKER_TOKEN: ${PLATFORM_MAKER_TOKEN}
       PLATFORM_AUDITOR_TOKEN: ${PLATFORM_AUDITOR_TOKEN}
       AGENT_INBOUND_TOKEN: ${AGENT_INBOUND_TOKEN}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in .env}
+      # Model provider per agent; ./sigil up checks the key each one needs. Empty values
+      # fall back to the agent layer's defaults (e.g. the provider's default model).
+      AGENT_LLM_PROVIDER: ${AGENT_LLM_PROVIDER:-anthropic}
+      AGENT_MAKER_PROVIDER: ${AGENT_MAKER_PROVIDER:-}
+      AGENT_AUDITOR_PROVIDER: ${AGENT_AUDITOR_PROVIDER:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
+      AGENT_OPENROUTER_VISION: ${AGENT_OPENROUTER_VISION:-0}
+      AGENT_MAKER_MODEL: ${AGENT_MAKER_MODEL:-}
+      AGENT_AUDITOR_MODEL: ${AGENT_AUDITOR_MODEL:-}
+      AGENT_MAKER_EFFORT: ${AGENT_MAKER_EFFORT:-high}
+      AGENT_AUDITOR_EFFORT: ${AGENT_AUDITOR_EFFORT:-high}
       AGENT_SCHEDULER: ${AGENT_SCHEDULER:-1}
       AGENT_CAMERA_ONLY_PROOFS: ${CAMERA_ONLY_PROOFS:-false}
-      AGENT_MAKER_MODEL: ${AGENT_MAKER_MODEL:-claude-opus-5-5}
-      AGENT_AUDITOR_MODEL: ${AGENT_AUDITOR_MODEL:-claude-opus-5-5}
     # The agent's sandbox resolves the gateway's address once at startup, so the gateway
     # must already be up.
     depends_on:

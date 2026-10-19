@@ -124,9 +124,30 @@ cmd_init() {
   fi
 
   echo
-  [ -n "$(get_env ANTHROPIC_API_KEY)" ] || echo "Next: set ANTHROPIC_API_KEY in .env"
+  missing=$(missing_model_keys)
+  [ -z "$missing" ] || echo "Next: set $missing in .env"
   [ -n "$(get_env AUSD_MINT)" ] || echo "Next: ./sigil devnet   (or MOCK_CHAIN=true and any AUSD_MINT)"
   echo "Then: ./sigil up"
+}
+
+# The API keys the agents' providers need but .env doesn't have, as the agent layer
+# resolves them: AGENT_MAKER/AUDITOR_PROVIDER, else AGENT_LLM_PROVIDER, else anthropic.
+missing_model_keys() {
+  # Like compose: a variable set in the shell wins over .env.
+  setting() { printenv "$1" || get_env "$1"; }
+  both=$(setting AGENT_LLM_PROVIDER); both=${both:-anthropic}
+  maker=$(setting AGENT_MAKER_PROVIDER); auditor=$(setting AGENT_AUDITOR_PROVIDER)
+  needed=""
+  for provider in "${maker:-$both}" "${auditor:-$both}"; do
+    case "$provider" in
+      anthropic) key=ANTHROPIC_API_KEY ;;
+      openrouter) key=OPENROUTER_API_KEY ;;
+      *) die "unknown model provider '$provider' (anthropic or openrouter)" ;;
+    esac
+    case " $needed " in *" $key "*) continue ;; esac
+    [ -n "$(setting "$key")" ] || needed="${needed:+$needed }$key"
+  done
+  echo "$needed"
 }
 
 cmd_devnet() {
@@ -144,6 +165,8 @@ cmd_up() {
   for name in $(repos | awk '{ print $1 }'); do
     [ -d "repos/$name" ] || die "repos/$name missing: run ./sigil sync"
   done
+  missing=$(missing_model_keys)
+  [ -z "$missing" ] || die "set $missing in .env (the agents' model provider needs it)"
   docker compose up -d --build --wait
   docker compose ps
   echo
