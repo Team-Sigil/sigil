@@ -539,7 +539,7 @@ Per §12. Same handler path as 16.2 step 4.
 | Topic | Default for MVP | Status |
 |---|---|---|
 | Emergency with no guardian answer | Wait; no automatic emergency amount | default |
-| Several dependents per guardian | Out of scope: 1 guardian, 1 dependent | default |
+| Several dependents per guardian | Supported: one family per dependent (own policy, budget, freeze); all share the guardian's reservoir and delegation; a dependent has exactly one guardian | decided |
 | Multiple guardians | Out of scope | default |
 | Dependent policy visibility | Outer limits only | default |
 | Notifications | In-app + SSE only | default |
@@ -553,7 +553,7 @@ To change a default: `[SPEC]` PR updating this table.
 
 ## 18. Out of scope
 
-Mainnet, real fiat, KYC, multiple dependents/guardians, an Android app, push notifications, LINE/Telegram bots, on-chain spending-limit programs, KMS/HSM (mention as production path only).
+Mainnet, real fiat, KYC, multiple guardians, an Android app, push notifications, LINE/Telegram bots, on-chain spending-limit programs, KMS/HSM (mention as production path only).
 
 ---
 
@@ -585,3 +585,4 @@ Mainnet, real fiat, KYC, multiple dependents/guardians, an Android app, push not
 | 2026-10-17 | 1.0 | Initial spec from architecture doc |
 | 2026-10-18 | 1.0.1 | The client is a native mobile app, not a web app: §3 stack, §4 layout and ownership, §18, §19; receipts use verified in-app capture |
 | 2026-10-18 | 1.0.2 | The mobile app is iOS only: §3; Android is out of scope (§18) |
+| 2026-10-19 | 1.0.3 | A guardian may have several dependents (§17, §18); multiple guardians stay out of scope |
