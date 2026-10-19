@@ -97,6 +97,10 @@ total.
 A request at or above `proof_threshold` is **sent first**, and the dependent then owes a
 receipt. Until it arrives, `POST /requests` returns `409 PROOF_OUTSTANDING`.
 
+> **Not in use yet:** the agent layer still asks for proof before paying, so today an owed
+> receipt is rare (README "Known gaps" 7). Build the screens below anyway; they start
+> mattering as soon as the agent adopts proof after payment.
+
 - `GET /proof-obligations` lists what is owed (`amount`, `request_id`, `transfer_id`).
 - Upload against the obligation's `request_id` as usual, `POST /requests/{id}/proofs`.
 - Two ways to show it: the **in-app camera** with an App Attest capture claim, as before,

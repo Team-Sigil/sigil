@@ -40,6 +40,9 @@ MAX_MESSAGE_CHARS = 2_000
 MAX_PROOF_BYTES = 15 * 1024 * 1024  # raw upload; the stored copy is normalised to <= 3.75 MB
 MAX_PROOFS_PER_REQUEST = 3  # the agent reads the first 3; more would be silently ignored
 PDF_MAGIC = b"%PDF-"  # an online order's receipt; typed from the bytes, never Content-Type
+# A PDF is stored and sent to the agent as uploaded, so it must fit the agent's own
+# max_proof_bytes (5 MB) or the agent would skip it.
+MAX_PDF_BYTES = 5 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 LIST_LIMIT = 50
@@ -48,7 +51,7 @@ LIST_LIMIT = 50
 class PayloadTooLargeError(DomainError):
     code = "PAYLOAD_TOO_LARGE"
     status = 413
-    message = "Proofs may be at most 5 MB."
+    message = "Proofs may be at most 15 MB."
 
 
 class UnsupportedProofError(DomainError):
@@ -309,6 +312,8 @@ async def upload_proof(
         # never the Content-Type. A photo is tied to reality by App Attest; a PDF is tied
         # to it only by the shop's signature, so an unsigned one is stored but never shown
         # to the model as evidence (SPEC §8.9).
+        if len(data) > MAX_PDF_BYTES:
+            raise PayloadTooLargeError("PDF receipts may be at most 5 MB.")
         digest = hashlib.sha256(data).hexdigest()
         seen = await session.scalar(
             select(Proof.id).where(Proof.family_id.in_(sibling_families), Proof.sha256 == digest)

@@ -37,7 +37,7 @@ sequenceDiagram
 The message the gateway builds looks like this:
 
 ```
-sigil.app wants you to sign in with your Solana account:
+iden.casa wants you to sign in with your Solana account:
 Dpz6xo6tnBkxeKLoD1tEV6tPv21SSJPLEVNpsfv8ZrDN
 
 Sign in to Sigil.
@@ -66,11 +66,8 @@ Three settings in `.env`:
 | Variable | What to set | Why |
 |---|---|---|
 | `JWT_SECRET` | a long random value: `openssl rand -hex 32` | signs session tokens; never commit it |
-| `SIWS_DOMAIN` | your app's domain, e.g. `sigil.app` | the first line of the message; must equal the host of the `app_url` the app gives Phantom (see below) |
+| `SIWS_DOMAIN` | the app's domain: `iden.casa` | the first line of the message; must equal the host of the `app_url` the app gives Phantom (see below) |
 | `JWT_TTL_HOURS` | `12` or less | session length (capped at 12 by SEC-09) |
-
-Your own `.env` may still say `SIWS_DOMAIN=localhost:3000` from the web-app days; set it to
-the host of the `app_url` your app gives Phantom.
 
 Then start the stack (Postgres holds the nonces):
 
@@ -121,7 +118,7 @@ Phantom's deeplink docs; check parameter names against the current docs.
 
 ```
 https://phantom.app/ul/v1/connect
-  ?app_url=https://sigil.app          ← its host must equal SIWS_DOMAIN
+  ?app_url=https://iden.casa          ← its host must equal SIWS_DOMAIN
   &dapp_encryption_public_key=<base58 x25519 public key>
   &redirect_link=sigil://onConnect
   &cluster=devnet
@@ -138,7 +135,7 @@ Phantom redirects back with `phantom_encryption_public_key`, `nonce` and `data`.
 
 ```
 POST /api/v1/auth/nonce   {"wallet": "<public_key>", "purpose": "login"}
-→ {"nonce": "...", "message": "sigil.app wants you to sign in ...", "expires_at": "..."}
+→ {"nonce": "...", "message": "iden.casa wants you to sign in ...", "expires_at": "..."}
 ```
 
 **Step C: have Phantom sign it.**

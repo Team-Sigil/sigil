@@ -131,7 +131,7 @@ def check_transfer(facts: TransferFacts) -> str | None:
         if reason:
             return reason
 
-    return _proof_failure(facts, policy)
+    return _proof_failure(facts)
 
 
 def _review_failure(facts: TransferFacts, policy: PolicyBody) -> str | None:
@@ -161,7 +161,7 @@ def _review_failure(facts: TransferFacts, policy: PolicyBody) -> str | None:
     return None
 
 
-def _proof_failure(facts: TransferFacts, policy: PolicyBody) -> str | None:
+def _proof_failure(facts: TransferFacts) -> str | None:
     """The engine's own proof records decide, not the agent's claims.
 
     Proof no longer has to exist before the money moves: a dependent cannot buy anything

@@ -267,6 +267,19 @@ class TestOnlineOrders:
         )
         assert response.status_code == 422
 
+    async def test_a_pdf_larger_than_the_agent_reads_is_refused(
+        self, app_client: httpx.AsyncClient, world: World
+    ) -> None:
+        """Stored and sent as uploaded, so over 5 MB the agent would skip it."""
+        headers = await login(app_client, world.dependent_key)
+        request = await world.add_request(30 * AUSD)
+        too_big = PDF + b"%" * (5 * 1024 * 1024)
+        response = await upload(
+            app_client, headers, str(request.id), too_big, content_type="application/pdf"
+        )
+        assert response.status_code == 413
+        assert response.json()["error"]["message"] == "PDF receipts may be at most 5 MB."
+
     async def test_an_unsigned_pdf_does_not_settle_the_debt(
         self, app_client: httpx.AsyncClient, world: World
     ) -> None:

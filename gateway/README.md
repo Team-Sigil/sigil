@@ -314,7 +314,8 @@ nonce:{nonce}
 **Proofs.** A JPEG, PNG or WebP image (typed from its bytes, not the `Content-Type`; send
 iPhone photos as JPEG, not HEIC; at least 200 px), a **PDF** (an online order's receipt,
 which cannot be photographed — see "Signed PDF receipts"), or plain text (stored as the
-dependent's claim, never as evidence). Up to 15 MB as uploaded and 3 per request. The gateway applies
+dependent's claim, never as evidence). Up to 15 MB as uploaded (a PDF up to 5 MB, since it is
+sent to the agent as uploaded and the agent reads at most 5 MB) and 3 per request. The gateway applies
 the EXIF rotation, strips all metadata (GPS included) by re-encoding, limits the long edge to
 2,576 px and keeps the stored copy under 3.75 MB; the agent only sees that copy, and the
 original is kept encrypted. Flags set at upload: `duplicate` (same bytes as an earlier proof from
@@ -642,3 +643,7 @@ normalisation).
 5. **Policy proposals are listed, not adopted.** Adopting one means drafting and signing a
    new policy version; there is no one-click path yet.
 6. **No CI pipeline yet.** Tests, lint and the secret scan SEC-18 asks for run locally only.
+7. **The agent doesn't use proof after payment yet.** The gateway pays first and holds the
+   next request until the receipt arrives, but the agent contract can't tell the agent a
+   receipt is owed or let it settle one, so the agent still asks for proof before paying.
+   The agent layer's `proof-after-payment.md` proposes the contract and lists the decisions.

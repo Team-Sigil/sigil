@@ -33,7 +33,8 @@ services:
       postgres:
         condition: service_healthy
 
-  # Stand-in for the crypto layer until Han's signer is available.
+  # In-memory stand-in for the crypto layer, for local runs. The real signer
+  # (Team-Sigil/sigil-crypto) runs with the whole stack from Team-Sigil/sigil-infra.
   mock-crypto:
     build: .
     command: ["python", "-m", "mock_crypto"]

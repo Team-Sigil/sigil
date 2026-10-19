@@ -3,8 +3,10 @@
 > Written from [SPEC.md](../SPEC.md) and the [README](../README.md), which are the source of
 > truth. If this guide disagrees with them, they win.
 
-For Alwin, from the gateway. Gateway branch `feat/proof-after-payment`; checked against
-agent-layer `main` at `0fbe4b2` (OpenRouter).
+For Alwin, from the gateway. Written against agent-layer `main` at `0fbe4b2` (OpenRouter).
+
+> **Done on both sides** (2026-10-19): gateway `main`, agent layer `46e66cc`. The text below
+> is the original handoff, kept as the description of the behaviour.
 
 **Short version: the agent layer has to change.** A dependent who bought something online
 can't photograph the receipt, so they upload the shop's PDF instead. The gateway verifies
@@ -13,8 +15,8 @@ the shop's digital signature and tells the agent whether it did. Today the agent
 This note says what the gateway sends and what the agent needs to do with it.
 
 Related but separate: proof now comes **after** payment (SPEC §8.9). That changes the
-maker's `proof_required` guardrail and adds a settle call; it gets its own handoff. This one
-covers only how a PDF proof is read.
+maker's `proof_required` guardrail and adds a settle call; the agent layer's
+`proof-after-payment.md` proposes how. This one covers only how a PDF proof is read.
 
 ## What the gateway does with a PDF
 
@@ -23,8 +25,8 @@ covers only how a PDF proof is read.
   is too large for you), 3 proofs per request like any other proof.
 - **Signature check at upload** (`proof_pdf.py`). The signed byte range must cover the whole
   file except the signature itself, the digest must match, the CMS signature must verify,
-  the signing certificate must chain to a root in `PDF_TRUSTED_ROOTS_PATH` and have been
-  valid now (the signing time in a signature is the signer's own claim, so it isn't
+  the signing certificate must chain to a root in `PDF_TRUSTED_ROOTS_PATH` and be valid
+  now (the signing time in a signature is the signer's own claim, so it isn't
   relied on), be meant for signing (key usage and extended key usage, when present), and
   its organisation name must exactly match a name on `PDF_ALLOWED_SIGNERS`. **Only Lazada
   is accepted for now.**
