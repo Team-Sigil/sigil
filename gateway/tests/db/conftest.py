@@ -162,6 +162,8 @@ async def app_client(
         agent_wallet_pubkey=AGENT_WALLET,
         ausd_mint=MINT,
         pdf_trusted_roots_path=receipt_root[1],
+        # The test receipts' signer (tests/signed_pdf.py), not the real Lazada name.
+        pdf_allowed_signers="Lazada",
     )
     app = create_app(
         settings=settings,
