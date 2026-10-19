@@ -98,7 +98,7 @@ async def get_usage(
     family_id: str, _: MakerDep, session: SessionDep, settings: SettingsDep
 ) -> agent.UsageStatus:
     return await service.usage_status(
-        session, family_id, settings.llm_token_budget_per_family_per_day, _now()
+        session, family_id, settings.llm_token_budget_per_guardian_per_day, _now()
     )
 
 
@@ -168,7 +168,7 @@ async def report_usage(
     body: agent.UsageReport, _: MakerDep, session: SessionDep, settings: SettingsDep
 ) -> agent.UsageStatus:
     return await service.report_usage(
-        session, body, settings.llm_token_budget_per_family_per_day, _now()
+        session, body, settings.llm_token_budget_per_guardian_per_day, _now()
     )
 
 

@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     rate_limit_per_min: int = Field(default=30, gt=0)
     # Each dependent message (new request, follow-up or proof) runs the agent.
     dependent_messages_per_day: int = Field(default=50, gt=0)
-    llm_token_budget_per_family_per_day: int = Field(default=200_000, ge=0)
+    llm_token_budget_per_guardian_per_day: int = Field(default=200_000, ge=0)
 
     @model_validator(mode="after")
     def distinct_agent_tokens(self) -> Self:
