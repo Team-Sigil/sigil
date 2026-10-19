@@ -19,7 +19,9 @@ services:
       - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8300/healthz')"]
-      interval: 5s
+      interval: 30s
+      start_period: 60s
+      start_interval: 2s
       timeout: 3s
       retries: 10
 

@@ -18,7 +18,9 @@ services:
       - ./infra/postgres/init-roles.sh:/docker-entrypoint-initdb.d/01-init-roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sigil_owner -d sigil"]
-      interval: 2s
+      interval: 30s
+      start_period: 60s
+      start_interval: 2s
       timeout: 3s
       retries: 30
 
@@ -76,7 +78,9 @@ services:
         condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
-      interval: 5s
+      interval: 30s
+      start_period: 60s
+      start_interval: 2s
       timeout: 3s
       retries: 10
 
